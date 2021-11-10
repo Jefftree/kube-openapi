@@ -32,8 +32,8 @@ import (
 	"github.com/golang/protobuf/proto"
 	openapi_v3 "github.com/googleapis/gnostic/openapiv3"
 	"github.com/munnerz/goautoneg"
-	"k8s.io/kube-openapi/pkg/spec3"
 	"k8s.io/kube-openapi/pkg/common"
+	"k8s.io/kube-openapi/pkg/spec3"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
@@ -42,20 +42,21 @@ const (
 
 	mimeJson = "application/json"
 	// TODO(mehdy): change @68f4ded to a version tag when gnostic add version tags.
-	mimePb   = "application/com.github.googleapis.gnostic.OpenAPIv2@68f4ded+protobuf"
+	mimePb   = "application/com.github.googleapis.gnostic.OpenAPIv3@68f4ded+protobuf"
 	mimePbGz = "application/x-gzip"
 
 	subTypeProtobuf = "com.github.proto-openapi.spec.v3@v1.0+protobuf"
-	subTypeJSON = "json"
+	subTypeJSON     = "json"
 )
 
 // OpenAPIService is the service responsible for serving OpenAPI spec. It has
 // the ability to safely change the spec while serving it.
+// OpenAPI V3 currently does not use the lazy marshaling strategy that OpenAPI V2 is using
 type OpenAPIService struct {
 	// rwMutex protects All members of this service.
-	rwMutex sync.RWMutex
+	rwMutex      sync.RWMutex
 	lastModified time.Time
-	v3Schema map[string]*OpenAPIV3Group
+	v3Schema     map[string]*OpenAPIV3Group
 }
 
 type OpenAPIV3Group struct {
@@ -129,7 +130,7 @@ func (o *OpenAPIService) UpdateGroupVersion(group string, openapi *spec3.OpenAPI
 	o.rwMutex.Lock()
 	defer o.rwMutex.Unlock()
 
-	specBytes, err :=  json.Marshal(openapi)
+	specBytes, err := json.Marshal(openapi)
 	if err != nil {
 		return err
 	}
@@ -233,7 +234,6 @@ func (o *OpenAPIV3Group) UpdateSpec(specBytes []byte) (err error) {
 	specPbGzETag := computeETag(specPbGz)
 
 	lastModified := time.Now()
-
 
 	o.specBytes = specBytes
 	o.specPb = specPb

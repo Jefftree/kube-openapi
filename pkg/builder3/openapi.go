@@ -19,12 +19,12 @@ package builder3
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	restful "github.com/emicklei/go-restful"
 	"k8s.io/kube-openapi/pkg/common"
 	"k8s.io/kube-openapi/pkg/spec3"
 	"k8s.io/kube-openapi/pkg/util"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+	"net/http"
 	"strings"
 )
 
@@ -56,7 +56,7 @@ func (o *openAPI) buildResponse(model interface{}, description string) (*spec3.R
 
 	s, err := o.toSchema(util.GetCanonicalTypeName(model))
 	if err != nil {
-		return response, err
+		return nil, err
 	}
 
 	response.ResponseProps.Content["application/json"] = &spec3.MediaType{
@@ -67,7 +67,7 @@ func (o *openAPI) buildResponse(model interface{}, description string) (*spec3.R
 	return response, nil
 }
 
-func (o *openAPI) buildOperations(route restful.Route) (*spec3.Operation, error) {
+func (o *openAPI) buildOperations(route restful.Route, inPathCommonParamsMap map[interface{}]*spec3.Parameter) (*spec3.Operation, error) {
 	ret := &spec3.Operation{
 		OperationProps: spec3.OperationProps{
 			Description: route.Doc,
@@ -84,6 +84,9 @@ func (o *openAPI) buildOperations(route restful.Route) (*spec3.Operation, error)
 	// Build responses
 	for _, resp := range route.ResponseErrors {
 		ret.Responses.StatusCodeResponses[resp.Code], err = o.buildResponse(resp.Model, resp.Message)
+		if err != nil {
+			return ret, err
+		}
 	}
 
 	// If there is no response but a write sample, assume that write sample is an http.StatusOK response.
@@ -96,6 +99,17 @@ func (o *openAPI) buildOperations(route restful.Route) (*spec3.Operation, error)
 
 	// TODO: Default response if needed. Common Response config
 
+	ret.Parameters = make([]*spec3.Parameter, 0)
+	for _, param := range route.ParameterDocs {
+		if _, isCommon := inPathCommonParamsMap[mapKeyFromParam(param)]; !isCommon {
+			openAPIParam, err := o.buildParameter(param.Data(), route.ReadSample)
+			if err != nil {
+				return ret, err
+			}
+			ret.Parameters = append(ret.Parameters, openAPIParam)
+		}
+	}
+
 	return ret, nil
 }
 
@@ -104,7 +118,7 @@ func newOpenAPI(config *common.Config) openAPI {
 		config: config,
 		spec: &spec3.OpenAPI{
 			Version: "3.0.0",
-			Info: config.Info,
+			Info:    config.Info,
 			Paths: &spec3.Paths{
 				Paths: map[string]*spec3.Path{},
 			},
@@ -175,7 +189,7 @@ func (o *openAPI) buildOpenAPISpec(webServices []*restful.WebService) error {
 			sortParameters(pathItem.Parameters)
 
 			for _, route := range routes {
-				op, _ := o.buildOperations(route)
+				op, _ := o.buildOperations(route, inPathCommonParamsMap)
 
 				switch strings.ToUpper(route.Method) {
 				case "GET":
@@ -263,6 +277,17 @@ func (o *openAPI) buildParameter(restParam restful.ParameterData, bodySample int
 		},
 	}
 	switch restParam.Kind {
+	case restful.BodyParameterKind:
+		if bodySample != nil {
+			ret.In = "body"
+			ret.Schema, err = o.toSchema(util.GetCanonicalTypeName(bodySample))
+			return ret, err
+		} else {
+			// There is not enough information in the body parameter to build the definition.
+			// Body parameter has a data type that is a short name but we need full package name
+			// of the type to create a definition.
+			return ret, fmt.Errorf("restful body parameters are not supported: %v", restParam.DataType)
+		}
 	case restful.PathParameterKind:
 		ret.In = "path"
 		if !restParam.Required {
@@ -309,11 +334,6 @@ func (o *openAPI) buildDefinitionRecursively(name string) error {
 				schema.Extensions[k] = v
 			}
 		}
-		// if v, ok := item.Schema.Extensions[common.ExtensionV2Schema]; ok {
-		// 	if v2Schema, isOpenAPISchema := v.(spec.Schema); isOpenAPISchema {
-		// 		schema = v2Schema
-		// 	}
-		// }
 		o.spec.Components.Schemas[uniqueName] = schema
 		for _, v := range item.Dependencies {
 			if err := o.buildDefinitionRecursively(v); err != nil {
