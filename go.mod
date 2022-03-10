@@ -30,3 +30,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.0.2
 	sigs.k8s.io/yaml v1.2.0
 )
+
+replace github.com/google/gnostic => github.com/jefftree/gnostic v0.7.1
