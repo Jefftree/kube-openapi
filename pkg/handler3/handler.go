@@ -32,7 +32,9 @@ import (
 	"github.com/golang/protobuf/proto"
 	openapi_v3 "github.com/google/gnostic/openapiv3"
 	"github.com/google/uuid"
+	"k8s.io/component-base/metrics/legacyregistry"
 	"github.com/munnerz/goautoneg"
+	// "k8s.io/apiserver/pkg/endpoints/metrics"
 	"k8s.io/klog/v2"
 	"k8s.io/kube-openapi/pkg/cached"
 	"k8s.io/kube-openapi/pkg/common"
@@ -220,6 +222,7 @@ func (o *OpenAPIService) HandleDiscovery(w http.ResponseWriter, r *http.Request)
 }
 
 func (o *OpenAPIService) HandleGroupVersion(w http.ResponseWriter, r *http.Request) {
+	// func (o *openAPIV3Group) HandleGroupVersion(w http.ResponseWriter, r *http.Request) {
 	url := strings.SplitAfterN(r.URL.Path, "/", 4)
 	group := url[3]
 
@@ -289,6 +292,21 @@ func (o *OpenAPIService) HandleGroupVersion(w http.ResponseWriter, r *http.Reque
 
 func (o *OpenAPIService) RegisterOpenAPIV3VersionedService(servePath string, handler common.PathHandlerByGroupVersion) error {
 	handler.Handle(servePath, http.HandlerFunc(o.HandleDiscovery))
+	// handler.Handle(servePath, metrics.InstrumentHandlerFunc("GET",
+	// 	/* group = */ "",
+	// 	/* version = */ "",
+	// 	/* resource = */ "",
+	// 	/* subresource = */ "openapi",
+	// 	/* scope = */ "",
+	// 	/* component = */ "",
+	// 	/* deprecated */ false,
+	// 	/* removedRelease */ "",
+	// 	http.HandlerFunc(o.HandleDiscovery)))
 	handler.HandlePrefix(servePath+"/", http.HandlerFunc(o.HandleGroupVersion))
+	_ = legacyregistry.Handler()
 	return nil
 }
+
+// func (o *OpenAPIService) RegisterOpenAPIV3ServiceWithMetrics(servePath string, handler common.PathHandlerByGroupVersion) error {
+
+// }
