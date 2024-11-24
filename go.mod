@@ -8,8 +8,7 @@ require (
 	github.com/emicklei/go-restful/v3 v3.11.0
 	github.com/go-openapi/jsonreference v0.20.1
 	github.com/go-openapi/swag v0.23.0
-	github.com/golang/protobuf v1.5.4
-	github.com/google/gnostic-models v0.6.8
+	github.com/google/gnostic-models v0.6.9-0.20230804172637-c7be7c783f49
 	github.com/google/go-cmp v0.6.0
 	github.com/google/gofuzz v1.2.0
 	github.com/google/uuid v1.6.0
