@@ -46,14 +46,21 @@ func extractOpenAPISchemaNamePackage(comments []string) (string, error) {
 // The +k8s:openapi-model-package tag is used only when the yaml file
 // is absent.
 func resolvePackageModelPackage(pkg *types.Package) (string, error) {
-	av, err := apidefinitions.LoadAPIVersion(pkg.Dir)
+	apiVersion, err := apidefinitions.LoadAPIVersion(pkg.Dir)
 	if err != nil {
 		return "", err
 	}
-	if av != nil {
-		return av.Spec.ModelPackage, nil
+	tagPackage, err := extractOpenAPISchemaNamePackage(pkg.Comments)
+	if err != nil {
+		return "", err
 	}
-	return extractOpenAPISchemaNamePackage(pkg.Comments)
+	if apiVersion != nil {
+		if len(tagPackage) > 0 {
+			return "", fmt.Errorf("Expected to either a apiversion.yaml or k8s:openapi-model-package tag, but found both. Please remove one.")
+		}
+		return apiVersion.Spec.ModelPackage, nil
+	}
+	return tagPackage, nil
 }
 
 func singularTag(tagName string, comments []string) (*gengo.Tag, error) {
