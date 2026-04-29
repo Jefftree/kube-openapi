@@ -26,7 +26,7 @@ func TestLoadAPIVersion(t *testing.T) {
 	const manifest = `apiVersion: apidefinitions.k8s.io/v1alpha1
 kind: APIVersion
 metadata:
-  name: apps/v1
+  name: test.apidefinitions.k8s.io/v1
 spec:
   modelPackage: io.k8s.api.apps.v1
 `
@@ -42,7 +42,7 @@ spec:
 	if av == nil {
 		t.Fatal("expected APIVersion, got nil")
 	}
-	if got, want := av.Metadata.Name, "apps/v1"; got != want {
+	if got, want := av.Metadata.Name, "test.apidefinitions.k8s.io/v1"; got != want {
 		t.Errorf("metadata.name = %q, want %q", got, want)
 	}
 	if got, want := av.Spec.ModelPackage, "io.k8s.api.apps.v1"; got != want {

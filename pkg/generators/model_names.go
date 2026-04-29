@@ -56,7 +56,7 @@ func resolvePackageModelPackage(pkg *types.Package) (string, error) {
 	}
 	if apiVersion != nil {
 		if len(tagPackage) > 0 {
-			return "", fmt.Errorf("Expected to either a apiversion.yaml or k8s:openapi-model-package tag, but found both. Please remove one.")
+			return "", fmt.Errorf("in package %s: expected to either a apiversion.yaml or k8s:openapi-model-package tag, but found both. Please remove one.", pkg.Dir)
 		}
 		return apiVersion.Spec.ModelPackage, nil
 	}

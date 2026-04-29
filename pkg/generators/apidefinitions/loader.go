@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"sigs.k8s.io/yaml"
@@ -75,12 +76,23 @@ func validateTypeMeta(actualAPIVersion, actualKind, expectedKind string) error {
 	return nil
 }
 
+var (
+	groupRegexp = regexp.MustCompile(`^[a-z0-9]+(\.[a-z0-9]+)*$`)
+)
+
 func validateName(av *APIVersion) error {
 	if av.Metadata.Name == "" {
 		return fmt.Errorf("metadata.name is required")
 	}
-	if _, _, err := splitGroupVersion(av.Metadata.Name); err != nil {
+	g, v, err := splitGroupVersion(av.Metadata.Name)
+	if err != nil {
 		return fmt.Errorf("metadata.name: %w", err)
+	}
+	if g != "" && !groupRegexp.MatchString(g) {
+		return fmt.Errorf("metadata.name: group %q must be lowercase letters, optionally dot-separated", g)
+	}
+	if len(v) < 1 {
+		return fmt.Errorf("metadata.name: version is required")
 	}
 	return nil
 }
