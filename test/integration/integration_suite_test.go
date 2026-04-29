@@ -122,6 +122,20 @@ var _ = BeforeSuite(func() {
 	Expect(err).ShouldNot(HaveOccurred())
 	Eventually(session, timeoutSeconds).Should(gexec.Exit(0))
 
+	By("'apidefinitions' running openapi-gen")
+	args = append([]string{
+		"--output-dir", tempDir + "/apidefinitions",
+		"--output-pkg", outputPkg + "/apidefinitions",
+		"--output-file", generatedCodeFileName,
+		"--output-model-name-file", generatedSchemaNameCodeFileName,
+		"--go-header-file", headerFilePath,
+	}, path.Join(testPkgRoot, "apidefinitions"))
+	command = exec.Command(openAPIGenPath, args...)
+	command.Dir = workingDirectory
+	session, err = gexec.Start(command, GinkgoWriter, GinkgoWriter)
+	Expect(err).ShouldNot(HaveOccurred())
+	Eventually(session, timeoutSeconds).Should(gexec.Exit(0))
+
 	By("writing swagger v2.0")
 	// Create the OpenAPI swagger builder.
 	binaryPath, berr = gexec.Build("./builder/main.go")
@@ -190,6 +204,17 @@ var _ = Describe("Open API Definitions Generation", func() {
 				"diff", "-u",
 				"pkg/generated/namedmodels/"+generatedCodeFileName,
 				generatedFile("namedmodels/"+generatedCodeFileName),
+			)
+			command.Dir = workingDirectory
+			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
+			Expect(err).ShouldNot(HaveOccurred())
+			Eventually(session, timeoutSeconds).Should(gexec.Exit(0))
+		})
+		It("'apidefinitions' Generated code should match golden files", func() {
+			command := exec.Command(
+				"diff", "-u",
+				"pkg/generated/apidefinitions/"+generatedCodeFileName,
+				generatedFile("apidefinitions/"+generatedCodeFileName),
 			)
 			command.Dir = workingDirectory
 			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
