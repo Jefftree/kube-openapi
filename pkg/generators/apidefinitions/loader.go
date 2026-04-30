@@ -81,29 +81,31 @@ var (
 )
 
 func validateName(av *APIVersion) error {
-	if av.Metadata.Name == "" {
-		return fmt.Errorf("metadata.name is required")
-	}
-	g, v, err := splitGroupVersion(av.Metadata.Name)
+	g, _, err := splitGroupVersion(av.Metadata.Name)
 	if err != nil {
 		return fmt.Errorf("metadata.name: %w", err)
 	}
 	if g != "" && !groupRegexp.MatchString(g) {
 		return fmt.Errorf("metadata.name: group %q must be lowercase letters, optionally dot-separated", g)
 	}
-	if len(v) < 1 {
-		return fmt.Errorf("metadata.name: version is required")
-	}
 	return nil
 }
 
 // splitGroupVersion parses "<group>/<version>" or "<version>" (core group).
 func splitGroupVersion(name string) (string, string, error) {
-	if i := strings.LastIndex(name, "/"); i >= 0 {
-		return name[:i], name[i+1:], nil
+	parts := strings.Split(name, "/")
+	switch len(parts) {
+	case 1:
+		if parts[0] == "" {
+			return "", "", fmt.Errorf("version is required")
+		}
+		return "", parts[0], nil
+	case 2:
+		if parts[0] == "" || parts[1] == "" {
+			return "", "", fmt.Errorf("group and version are both required when using <group>/<version>: %s", name)
+		}
+		return parts[0], parts[1], nil
+	default:
+		return "", "", fmt.Errorf("expected <group>/<version> or <version> but got: %s", name)
 	}
-	if name == "" {
-		return "", "", fmt.Errorf("name is empty")
-	}
-	return "", name, nil
 }

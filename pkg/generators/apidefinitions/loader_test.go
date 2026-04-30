@@ -59,3 +59,30 @@ func TestLoadAPIVersion_Missing(t *testing.T) {
 		t.Errorf("expected nil APIVersion, got %+v", av)
 	}
 }
+
+func TestValidateName(t *testing.T) {
+	tests := []struct {
+		name string
+		err  bool
+	}{
+		{name: "apps/v1"},
+		{name: "v1"},
+		{name: "apidefinitions.k8s.io/v1alpha1"},
+		{name: "foo/bar/v1", err: true},
+		{name: "", err: true},
+		{name: "apps/", err: true},
+		{name: "/v1", err: true},
+		{name: "Apps/v1", err: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateName(&APIVersion{Metadata: Metadata{Name: tc.name}})
+			if tc.err && err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !tc.err && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
