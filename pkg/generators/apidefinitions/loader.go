@@ -77,7 +77,7 @@ func validateTypeMeta(actualAPIVersion, actualKind, expectedKind string) error {
 }
 
 var (
-	groupRegexp = regexp.MustCompile(`^[a-z0-9]+(\.[a-z0-9]+)*$`)
+	groupRegexp = regexp.MustCompile(`^[a-z0-9\-]+(\.[a-z0-9\-]+)*$`)
 )
 
 func validateName(av *APIVersion) error {
