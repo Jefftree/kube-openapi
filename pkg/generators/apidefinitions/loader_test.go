@@ -68,6 +68,7 @@ func TestValidateName(t *testing.T) {
 		{name: "apps/v1"},
 		{name: "v1"},
 		{name: "apidefinitions.k8s.io/v1alpha1"},
+		{name: "code-generator.k8s.io/v2beta2"},
 		{name: "foo/bar/v1", err: true},
 		{name: "", err: true},
 		{name: "apps/", err: true},
