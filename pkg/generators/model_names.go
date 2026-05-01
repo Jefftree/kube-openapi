@@ -42,9 +42,8 @@ func extractOpenAPISchemaNamePackage(comments []string) (string, error) {
 }
 
 // resolvePackageModelPackage returns the OpenAPI model package for pkg.
-// When apiversion.yaml is present, spec.modelPackage is authoritative.
-// The +k8s:openapi-model-package tag is used only when the yaml file
-// is absent.
+// The model package may be specified via apiversion.yaml's spec.modelPackage
+// or the +k8s:openapi-model-package tag. If both are present, they must agree.
 func resolvePackageModelPackage(pkg *types.Package) (string, error) {
 	apiVersion, err := apidefinitions.LoadAPIVersion(pkg.Dir)
 	if err != nil {
@@ -55,8 +54,8 @@ func resolvePackageModelPackage(pkg *types.Package) (string, error) {
 		return "", err
 	}
 	if apiVersion != nil {
-		if len(tagPackage) > 0 {
-			return "", fmt.Errorf("in package %s: expected either a apiversion.yaml or k8s:openapi-model-package tag, but found both. Please remove one.", pkg.Dir)
+		if len(tagPackage) > 0 && tagPackage != apiVersion.Spec.ModelPackage {
+			return "", fmt.Errorf("in package %s: apiversion.yaml spec.modelPackage (%q) and k8s:openapi-model-package tag (%q) disagree. Please make them match or remove one.", pkg.Dir, apiVersion.Spec.ModelPackage, tagPackage)
 		}
 		return apiVersion.Spec.ModelPackage, nil
 	}
