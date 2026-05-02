@@ -127,6 +127,11 @@ func isOpenAPIEnabledForPackage(pkg *types.Package) bool {
 	if pkg == nil {
 		return false
 	}
+	hasFalse := hasOpenAPITagValue(pkg.Comments, tagValueFalse)
+	hasTrue := hasOpenAPITagValue(pkg.Comments, tagValueTrue)
+	if hasFalse && !hasTrue { // For backward compatability
+		return false
+	}
 	av, err := apidefinitions.LoadAPIVersion(pkg.Dir)
 	if err != nil {
 		klog.Fatalf("Package %v: %v", pkg.Path, err)
@@ -134,7 +139,7 @@ func isOpenAPIEnabledForPackage(pkg *types.Package) bool {
 	if av != nil {
 		return true
 	}
-	return hasOpenAPITagValue(pkg.Comments, tagValueTrue)
+	return hasTrue
 }
 
 const (

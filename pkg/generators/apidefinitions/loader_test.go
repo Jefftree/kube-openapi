@@ -26,9 +26,7 @@ func TestLoadAPIVersion(t *testing.T) {
 	const manifest = `apiVersion: apidefinitions.k8s.io/v1alpha1
 kind: APIVersion
 metadata:
-  name: test.apidefinitions.k8s.io/v1
-spec:
-  modelPackage: io.k8s.api.apps.v1
+  name: apps/v1
 `
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "apiversion.yaml"), []byte(manifest), 0644); err != nil {
@@ -42,11 +40,11 @@ spec:
 	if av == nil {
 		t.Fatal("expected APIVersion, got nil")
 	}
-	if got, want := av.Metadata.Name, "test.apidefinitions.k8s.io/v1"; got != want {
+	if got, want := av.Metadata.Name, "apps/v1"; got != want {
 		t.Errorf("metadata.name = %q, want %q", got, want)
 	}
-	if got, want := av.Spec.ModelPackage, "io.k8s.api.apps.v1"; got != want {
-		t.Errorf("spec.modelPackage = %q, want %q", got, want)
+	if got, want := av.VersionFromName(), "v1"; got != want {
+		t.Errorf("VersionFromName() = %q, want %q", got, want)
 	}
 }
 
@@ -57,6 +55,47 @@ func TestLoadAPIVersion_Missing(t *testing.T) {
 	}
 	if av != nil {
 		t.Errorf("expected nil APIVersion, got %+v", av)
+	}
+}
+
+func TestLoadAPIGroup(t *testing.T) {
+	const manifest = `apiVersion: apidefinitions.k8s.io/v1alpha1
+kind: APIGroup
+metadata:
+  name: apps
+spec:
+  modelPackage: io.k8s.api.apps
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "apigroup.yaml"), []byte(manifest), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := LoadAPIGroup(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if g == nil {
+		t.Fatal("expected APIGroup, got nil")
+	}
+	if got, want := g.Metadata.Name, "apps"; got != want {
+		t.Errorf("metadata.name = %q, want %q", got, want)
+	}
+	if got, want := g.Spec.ModelPackage, "io.k8s.api.apps"; got != want {
+		t.Errorf("spec.modelPackage = %q, want %q", got, want)
+	}
+	if got, want := g.ModelPackageFor("v1"), "io.k8s.api.apps.v1"; got != want {
+		t.Errorf("ModelPackageFor(v1) = %q, want %q", got, want)
+	}
+}
+
+func TestLoadAPIGroup_Missing(t *testing.T) {
+	g, err := LoadAPIGroup(t.TempDir())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if g != nil {
+		t.Errorf("expected nil APIGroup, got %+v", g)
 	}
 }
 

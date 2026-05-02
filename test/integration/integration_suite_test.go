@@ -124,12 +124,12 @@ var _ = BeforeSuite(func() {
 
 	By("'apidefinitions' running openapi-gen")
 	args = append([]string{
-		"--output-dir", tempDir + "/apidefinitions",
-		"--output-pkg", outputPkg + "/apidefinitions",
+		"--output-dir", tempDir + "/apidefinitions/v1",
+		"--output-pkg", outputPkg + "/apidefinitions/v1",
 		"--output-file", generatedCodeFileName,
 		"--output-model-name-file", generatedSchemaNameCodeFileName,
 		"--go-header-file", headerFilePath,
-	}, path.Join(testPkgRoot, "apidefinitions"))
+	}, path.Join(testPkgRoot, "apidefinitions", "v1"))
 	command = exec.Command(openAPIGenPath, args...)
 	command.Dir = workingDirectory
 	session, err = gexec.Start(command, GinkgoWriter, GinkgoWriter)
@@ -213,8 +213,8 @@ var _ = Describe("Open API Definitions Generation", func() {
 		It("'apidefinitions' Generated code should match golden files", func() {
 			command := exec.Command(
 				"diff", "-u",
-				"pkg/generated/apidefinitions/"+generatedCodeFileName,
-				generatedFile("apidefinitions/"+generatedCodeFileName),
+				"pkg/generated/apidefinitions/v1/"+generatedCodeFileName,
+				generatedFile("apidefinitions/v1/"+generatedCodeFileName),
 			)
 			command.Dir = workingDirectory
 			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
