@@ -54,7 +54,7 @@ type APIGroupSpec struct {
 	// version in this group. The per-version model package is
 	// "<ModelPackage>.<version>" (e.g. "io.k8s.api.apps" + "v1" yields
 	// "io.k8s.api.apps.v1").
-	ModelPackage string `json:"modelPackage"`
+	ModelPackage string `json:"modelPackage,omitempty"`
 }
 
 // ModelPackageFor returns the OpenAPI model package for the given version.
