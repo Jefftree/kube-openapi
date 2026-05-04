@@ -1,4 +1,4 @@
-package apidefinitions
+package v1
 
 type Foo struct {
 	Bar Bar
