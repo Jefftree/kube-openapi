@@ -121,7 +121,7 @@ func apiTypeFilterFunc(c *generator.Context, t *types.Type) bool {
 
 // isOpenAPIEnabledForPackage reports whether openapi generation is
 // requested for pkg. apigroup.yaml and apiversion.yaml are authoritative when present.
-// The +k8s:openapi-gen=true tag is checked only when the API defintion files
+// The +k8s:openapi-gen=true tag is checked only when the API definition files
 // are absent.
 func isOpenAPIEnabledForPackage(pkg *types.Package) bool {
 	if pkg == nil {
