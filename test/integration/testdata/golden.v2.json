@@ -793,7 +793,9 @@
       "default": 0
      },
      "OtherSub": {
-      "default": {},
+      "default": {
+       "S": ""
+      },
       "$ref": "#/definitions/defaults.SubStruct"
      },
      "Sub": {
@@ -987,7 +989,10 @@
      "Field": {
       "type": "array",
       "items": {
-       "default": {},
+       "default": {
+        "Port": 0,
+        "Protocol": ""
+       },
        "$ref": "#/definitions/listtype.Item"
       },
       "x-kubernetes-list-map-keys": [
@@ -1089,7 +1094,9 @@
     ],
     "properties": {
      "Field": {
-      "default": {},
+      "default": {
+       "Field": 0
+      },
       "$ref": "#/definitions/structtype.DeclaredAtomicStruct",
       "x-kubernetes-map-type": "atomic"
      },
