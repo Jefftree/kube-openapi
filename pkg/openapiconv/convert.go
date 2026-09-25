@@ -58,19 +58,19 @@ func ConvertComponents(v2SecurityDefinitions spec.SecurityDefinitions, v2Definit
 	components := &spec3.Components{}
 
 	if v2Definitions != nil {
-		components.Schemas = make(map[string]*spec.Schema)
+		components.Schemas = make(map[string]*spec.Schema, len(v2Definitions))
 	}
 	for s, schema := range v2Definitions {
 		components.Schemas[s] = ConvertSchema(&schema)
 	}
 	if v2SecurityDefinitions != nil {
-		components.SecuritySchemes = make(spec3.SecuritySchemes)
+		components.SecuritySchemes = make(spec3.SecuritySchemes, len(v2SecurityDefinitions))
 	}
 	for s, securityScheme := range v2SecurityDefinitions {
 		components.SecuritySchemes[s] = ConvertSecurityScheme(securityScheme)
 	}
 	if v2Responses != nil {
-		components.Responses = make(map[string]*spec3.Response)
+		components.Responses = make(map[string]*spec3.Response, len(v2Responses))
 	}
 	for r, response := range v2Responses {
 		components.Responses[r] = ConvertResponse(&response, produces)
@@ -83,6 +83,11 @@ func ConvertSchema(v2Schema *spec.Schema) *spec.Schema {
 	if v2Schema == nil {
 		return nil
 	}
+	v3Schema := convertSchemaValue(*v2Schema)
+	return builderutil.WrapRefs(&v3Schema)
+}
+
+func convertSchemaValue(v2Schema spec.Schema) spec.Schema {
 	v3Schema := spec.Schema{
 		VendorExtensible:   v2Schema.VendorExtensible,
 		SchemaProps:        v2Schema.SchemaProps,
@@ -99,41 +104,63 @@ func ConvertSchema(v2Schema *spec.Schema) *spec.Schema {
 	}
 
 	if v2Schema.Properties != nil {
-		v3Schema.Properties = make(map[string]spec.Schema)
+		v3Schema.Properties = make(map[string]spec.Schema, len(v2Schema.Properties))
 		for key, property := range v2Schema.Properties {
-			v3Schema.Properties[key] = *ConvertSchema(&property)
+			v3Schema.Properties[key] = convertSchemaValue(property)
 		}
 	}
 	if v2Schema.Items != nil {
+		var itemSchema *spec.Schema
+		if v2Schema.Items.Schema != nil {
+			s := convertSchemaValue(*v2Schema.Items.Schema)
+			itemSchema = &s
+		}
+		var itemSchemas []spec.Schema
+		if v2Schema.Items.Schemas != nil {
+			itemSchemas = make([]spec.Schema, len(v2Schema.Items.Schemas))
+			for i, s := range v2Schema.Items.Schemas {
+				itemSchemas[i] = convertSchemaValue(s)
+			}
+		}
 		v3Schema.Items = &spec.SchemaOrArray{
-			Schema:  ConvertSchema(v2Schema.Items.Schema),
-			Schemas: ConvertSchemaList(v2Schema.Items.Schemas),
+			Schema:  itemSchema,
+			Schemas: itemSchemas,
 		}
 	}
 
 	if v2Schema.AdditionalProperties != nil {
+		var addPropSchema *spec.Schema
+		if v2Schema.AdditionalProperties.Schema != nil {
+			s := convertSchemaValue(*v2Schema.AdditionalProperties.Schema)
+			addPropSchema = &s
+		}
 		v3Schema.AdditionalProperties = &spec.SchemaOrBool{
-			Schema: ConvertSchema(v2Schema.AdditionalProperties.Schema),
+			Schema: addPropSchema,
 			Allows: v2Schema.AdditionalProperties.Allows,
 		}
 	}
 	if v2Schema.AdditionalItems != nil {
+		var addItemSchema *spec.Schema
+		if v2Schema.AdditionalItems.Schema != nil {
+			s := convertSchemaValue(*v2Schema.AdditionalItems.Schema)
+			addItemSchema = &s
+		}
 		v3Schema.AdditionalItems = &spec.SchemaOrBool{
-			Schema: ConvertSchema(v2Schema.AdditionalItems.Schema),
+			Schema: addItemSchema,
 			Allows: v2Schema.AdditionalItems.Allows,
 		}
 	}
 
-	return builderutil.WrapRefs(&v3Schema)
+	return v3Schema
 }
 
 func ConvertSchemaList(v2SchemaList []spec.Schema) []spec.Schema {
 	if v2SchemaList == nil {
 		return nil
 	}
-	v3SchemaList := []spec.Schema{}
-	for _, s := range v2SchemaList {
-		v3SchemaList = append(v3SchemaList, *ConvertSchema(&s))
+	v3SchemaList := make([]spec.Schema, len(v2SchemaList))
+	for i, s := range v2SchemaList {
+		v3SchemaList[i] = *ConvertSchema(&s)
 	}
 	return v3SchemaList
 }
@@ -153,12 +180,13 @@ func ConvertSecurityScheme(v2securityScheme *spec.SecurityScheme) *spec3.Securit
 	}
 
 	if v2securityScheme.Flow != "" {
-		securityScheme.Flows = make(map[string]*spec3.OAuthFlow)
-		securityScheme.Flows[v2securityScheme.Flow] = &spec3.OAuthFlow{
-			OAuthFlowProps: spec3.OAuthFlowProps{
-				AuthorizationUrl: v2securityScheme.AuthorizationURL,
-				TokenUrl:         v2securityScheme.TokenURL,
-				Scopes:           v2securityScheme.Scopes,
+		securityScheme.Flows = map[string]*spec3.OAuthFlow{
+			v2securityScheme.Flow: {
+				OAuthFlowProps: spec3.OAuthFlowProps{
+					AuthorizationUrl: v2securityScheme.AuthorizationURL,
+					TokenUrl:         v2securityScheme.TokenURL,
+					Scopes:           v2securityScheme.Scopes,
+				},
 			},
 		}
 	}
@@ -174,7 +202,7 @@ func ConvertPaths(v2Paths *spec.Paths) *spec3.Paths {
 	}
 
 	if v2Paths.Paths != nil {
-		paths.Paths = make(map[string]*spec3.Path)
+		paths.Paths = make(map[string]*spec3.Path, len(v2Paths.Paths))
 	}
 	for k, v := range v2Paths.Paths {
 		paths.Paths[k] = ConvertPathItem(v)
@@ -183,23 +211,27 @@ func ConvertPaths(v2Paths *spec.Paths) *spec3.Paths {
 }
 
 func ConvertPathItem(v2pathItem spec.PathItem) *spec3.Path {
-	path := &spec3.Path{
+	var params []*spec3.Parameter
+	if len(v2pathItem.Parameters) > 0 {
+		params = make([]*spec3.Parameter, len(v2pathItem.Parameters))
+		for i, param := range v2pathItem.Parameters {
+			params[i] = ConvertParameter(param)
+		}
+	}
+	return &spec3.Path{
 		Refable: v2pathItem.Refable,
 		PathProps: spec3.PathProps{
-			Get:     ConvertOperation(v2pathItem.Get),
-			Put:     ConvertOperation(v2pathItem.Put),
-			Post:    ConvertOperation(v2pathItem.Post),
-			Delete:  ConvertOperation(v2pathItem.Delete),
-			Options: ConvertOperation(v2pathItem.Options),
-			Head:    ConvertOperation(v2pathItem.Head),
-			Patch:   ConvertOperation(v2pathItem.Patch),
+			Get:        ConvertOperation(v2pathItem.Get),
+			Put:        ConvertOperation(v2pathItem.Put),
+			Post:       ConvertOperation(v2pathItem.Post),
+			Delete:     ConvertOperation(v2pathItem.Delete),
+			Options:    ConvertOperation(v2pathItem.Options),
+			Head:       ConvertOperation(v2pathItem.Head),
+			Patch:      ConvertOperation(v2pathItem.Patch),
+			Parameters: params,
 		},
 		VendorExtensible: v2pathItem.VendorExtensible,
 	}
-	for _, param := range v2pathItem.Parameters {
-		path.Parameters = append(path.Parameters, ConvertParameter(param))
-	}
-	return path
 }
 
 func ConvertOperation(v2Operation *spec.Operation) *spec3.Operation {
@@ -224,16 +256,25 @@ func ConvertOperation(v2Operation *spec.Operation) *spec3.Operation {
 				RequestBodyProps: spec3.RequestBodyProps{},
 			}
 			if v2Operation.Consumes != nil {
-				operation.RequestBody.Content = make(map[string]*spec3.MediaType)
-			}
-			for _, consumer := range v2Operation.Consumes {
-				operation.RequestBody.Content[consumer] = &spec3.MediaType{
-					MediaTypeProps: spec3.MediaTypeProps{
-						Schema: ConvertSchema(param.ParamProps.Schema),
-					},
+				operation.RequestBody.Content = make(map[string]*spec3.MediaType, len(v2Operation.Consumes))
+				convertedSchema := ConvertSchema(param.ParamProps.Schema)
+				for i, consumer := range v2Operation.Consumes {
+					s := convertedSchema
+					if i > 0 && convertedSchema != nil {
+						schemaCopy := *convertedSchema
+						s = &schemaCopy
+					}
+					operation.RequestBody.Content[consumer] = &spec3.MediaType{
+						MediaTypeProps: spec3.MediaTypeProps{
+							Schema: s,
+						},
+					}
 				}
 			}
 		} else {
+			if operation.Parameters == nil {
+				operation.Parameters = make([]*spec3.Parameter, 0, len(v2Operation.Parameters))
+			}
 			operation.Parameters = append(operation.Parameters, ConvertParameter(param))
 		}
 	}
@@ -245,7 +286,7 @@ func ConvertOperation(v2Operation *spec.Operation) *spec3.Operation {
 	}
 
 	if v2Operation.Responses.StatusCodeResponses != nil {
-		operation.Responses.StatusCodeResponses = make(map[int]*spec3.Response)
+		operation.Responses.StatusCodeResponses = make(map[int]*spec3.Response, len(v2Operation.Responses.StatusCodeResponses))
 	}
 	for k, v := range v2Operation.Responses.StatusCodeResponses {
 		operation.Responses.StatusCodeResponses[k] = ConvertResponse(&v, v2Operation.Produces)
@@ -267,13 +308,19 @@ func ConvertResponse(v2Response *spec.Response, produces []string) *spec3.Respon
 
 	if v2Response.Schema != nil {
 		if produces != nil {
-			response.Content = make(map[string]*spec3.MediaType)
-		}
-		for _, producer := range produces {
-			response.ResponseProps.Content[producer] = &spec3.MediaType{
-				MediaTypeProps: spec3.MediaTypeProps{
-					Schema: ConvertSchema(v2Response.Schema),
-				},
+			response.Content = make(map[string]*spec3.MediaType, len(produces))
+			convertedSchema := ConvertSchema(v2Response.Schema)
+			for i, producer := range produces {
+				s := convertedSchema
+				if i > 0 && convertedSchema != nil {
+					schemaCopy := *convertedSchema
+					s = &schemaCopy
+				}
+				response.ResponseProps.Content[producer] = &spec3.MediaType{
+					MediaTypeProps: spec3.MediaTypeProps{
+						Schema: s,
+					},
+				}
 			}
 		}
 	}
@@ -308,15 +355,15 @@ func ConvertParameter(v2Param spec.Parameter) *spec3.Parameter {
 }
 
 func ConvertRefableParameter(refable spec.Refable) spec.Refable {
-	if refable.Ref.String() != "" {
-		return spec.Refable{Ref: spec.MustCreateRef(strings.Replace(refable.Ref.String(), "#/parameters/", "#/components/parameters/", 1))}
+	if refStr := refable.Ref.String(); refStr != "" {
+		return spec.Refable{Ref: spec.MustCreateRef(strings.Replace(refStr, "#/parameters/", "#/components/parameters/", 1))}
 	}
 	return refable
 }
 
 func ConvertRefableResponse(refable spec.Refable) spec.Refable {
-	if refable.Ref.String() != "" {
-		return spec.Refable{Ref: spec.MustCreateRef(strings.Replace(refable.Ref.String(), "#/responses/", "#/components/responses/", 1))}
+	if refStr := refable.Ref.String(); refStr != "" {
+		return spec.Refable{Ref: spec.MustCreateRef(strings.Replace(refStr, "#/responses/", "#/components/responses/", 1))}
 	}
 	return refable
 }
