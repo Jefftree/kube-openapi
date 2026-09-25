@@ -17,17 +17,20 @@ limitations under the License.
 package builder3
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 
 	"k8s.io/kube-openapi/pkg/common"
 	"k8s.io/kube-openapi/pkg/spec3"
 )
 
-func mapKeyFromParam(param common.Parameter) interface{} {
-	return struct {
-		Name string
-		Kind common.ParameterKind
-	}{
+type paramKey struct {
+	Name string
+	Kind common.ParameterKind
+}
+
+func mapKeyFromParam(param common.Parameter) paramKey {
+	return paramKey{
 		Name: param.Name(),
 		Kind: param.Kind(),
 	}
@@ -46,7 +49,24 @@ func (s byNameIn) Less(i, j int) bool {
 	return s.parameters[i].Name < s.parameters[j].Name || (s.parameters[i].Name == s.parameters[j].Name && s.parameters[i].In < s.parameters[j].In)
 }
 
+func hasParamKey(keys []paramKey, target paramKey) bool {
+	for i := range keys {
+		if keys[i] == target {
+			return true
+		}
+	}
+	return false
+}
+
 // SortParameters sorts parameters by Name and In fields.
 func sortParameters(p []*spec3.Parameter) {
-	sort.Sort(byNameIn{p})
+	if len(p) <= 1 {
+		return
+	}
+	slices.SortFunc(p, func(a, b *spec3.Parameter) int {
+		if a.Name != b.Name {
+			return cmp.Compare(a.Name, b.Name)
+		}
+		return cmp.Compare(a.In, b.In)
+	})
 }

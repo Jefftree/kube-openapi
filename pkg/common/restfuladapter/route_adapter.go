@@ -14,12 +14,19 @@ type RouteAdapter struct {
 
 func (r *RouteAdapter) StatusCodeResponses() []common.StatusCodeResponse {
 	// go-restful uses the ResponseErrors field to contain both error and regular responses.
-	var responses []common.StatusCodeResponse
-	for _, res := range r.Route.ResponseErrors {
-		localRes := res
-		responses = append(responses, &ResponseErrorAdapter{&localRes})
+	if len(r.Route.ResponseErrors) == 0 {
+		return nil
 	}
-
+	responses := make([]common.StatusCodeResponse, len(r.Route.ResponseErrors))
+	errVals := make([]restful.ResponseError, len(r.Route.ResponseErrors))
+	adapters := make([]ResponseErrorAdapter, len(r.Route.ResponseErrors))
+	i := 0
+	for _, res := range r.Route.ResponseErrors {
+		errVals[i] = res
+		adapters[i] = ResponseErrorAdapter{&errVals[i]}
+		responses[i] = &adapters[i]
+		i++
+	}
 	return responses
 }
 
@@ -36,9 +43,14 @@ func (r *RouteAdapter) Path() string {
 }
 
 func (r *RouteAdapter) Parameters() []common.Parameter {
-	var params []common.Parameter
-	for _, rParam := range r.Route.ParameterDocs {
-		params = append(params, &ParamAdapter{rParam})
+	if len(r.Route.ParameterDocs) == 0 {
+		return nil
+	}
+	params := make([]common.Parameter, len(r.Route.ParameterDocs))
+	adapters := make([]ParamAdapter, len(r.Route.ParameterDocs))
+	for i, rParam := range r.Route.ParameterDocs {
+		adapters[i].Param = rParam
+		params[i] = &adapters[i]
 	}
 	return params
 }

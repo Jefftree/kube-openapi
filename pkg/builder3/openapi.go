@@ -40,12 +40,19 @@ type openAPI struct {
 	config      *common.OpenAPIV3Config
 	spec        *spec3.OpenAPI
 	definitions map[string]common.OpenAPIDefinition
+	refCache    map[string]spec.Ref
+}
+
+type routeWithParams struct {
+	route  common.Route
+	params []common.Parameter
 }
 
 func groupRoutesByPath(routes []common.Route) map[string][]common.Route {
-	pathToRoutes := make(map[string][]common.Route)
+	pathToRoutes := make(map[string][]common.Route, len(routes))
 	for _, r := range routes {
-		pathToRoutes[r.Path()] = append(pathToRoutes[r.Path()], r)
+		p := r.Path()
+		pathToRoutes[p] = append(pathToRoutes[p], r)
 	}
 	return pathToRoutes
 }
@@ -54,7 +61,7 @@ func (o *openAPI) buildResponse(model interface{}, description string, content [
 	response := &spec3.Response{
 		ResponseProps: spec3.ResponseProps{
 			Description: description,
-			Content:     make(map[string]*spec3.MediaType),
+			Content:     make(map[string]*spec3.MediaType, len(content)),
 		},
 	}
 
@@ -73,13 +80,14 @@ func (o *openAPI) buildResponse(model interface{}, description string, content [
 	return response, nil
 }
 
-func (o *openAPI) buildOperations(route common.Route, inPathCommonParamsMap map[interface{}]*spec3.Parameter) (*spec3.Operation, error) {
+func (o *openAPI) buildOperations(route common.Route, params []common.Parameter, inPathCommonParams []paramKey) (*spec3.Operation, error) {
+	statusCodeResponses := route.StatusCodeResponses()
 	ret := &spec3.Operation{
 		OperationProps: spec3.OperationProps{
 			Description: route.Description(),
 			Responses: &spec3.Responses{
 				ResponsesProps: spec3.ResponsesProps{
-					StatusCodeResponses: make(map[int]*spec3.Response),
+					StatusCodeResponses: make(map[int]*spec3.Response, len(statusCodeResponses)+len(o.config.CommonResponses)+1),
 				},
 			},
 		},
@@ -99,8 +107,9 @@ func (o *openAPI) buildOperations(route common.Route, inPathCommonParamsMap map[
 	}
 
 	// Build responses
-	for _, resp := range route.StatusCodeResponses() {
-		ret.Responses.StatusCodeResponses[resp.Code()], err = o.buildResponse(resp.Model(), resp.Message(), route.Produces())
+	produces := route.Produces()
+	for _, resp := range statusCodeResponses {
+		ret.Responses.StatusCodeResponses[resp.Code()], err = o.buildResponse(resp.Model(), resp.Message(), produces)
 		if err != nil {
 			return ret, err
 		}
@@ -108,7 +117,7 @@ func (o *openAPI) buildOperations(route common.Route, inPathCommonParamsMap map[
 
 	// If there is no response but a write sample, assume that write sample is an http.StatusOK response.
 	if len(ret.Responses.StatusCodeResponses) == 0 && route.ResponsePayloadSample() != nil {
-		ret.Responses.StatusCodeResponses[http.StatusOK], err = o.buildResponse(route.ResponsePayloadSample(), "OK", route.Produces())
+		ret.Responses.StatusCodeResponses[http.StatusOK], err = o.buildResponse(route.ResponsePayloadSample(), "OK", produces)
 		if err != nil {
 			return ret, err
 		}
@@ -124,13 +133,15 @@ func (o *openAPI) buildOperations(route common.Route, inPathCommonParamsMap map[
 		ret.Responses.Default = o.config.DefaultResponse
 	}
 
-	params := route.Parameters()
 	for _, param := range params {
-		_, isCommon := inPathCommonParamsMap[mapKeyFromParam(param)]
+		isCommon := hasParamKey(inPathCommonParams, mapKeyFromParam(param))
 		if !isCommon && param.Kind() != common.BodyParameterKind {
 			openAPIParam, err := o.buildParameter(param)
 			if err != nil {
 				return ret, err
+			}
+			if ret.Parameters == nil {
+				ret.Parameters = make([]*spec3.Parameter, 0, len(params))
 			}
 			ret.Parameters = append(ret.Parameters, openAPIParam)
 		}
@@ -156,7 +167,7 @@ func (o *openAPI) buildRequestBody(parameters []common.Parameter, consumes []str
 			}
 			r := &spec3.RequestBody{
 				RequestBodyProps: spec3.RequestBodyProps{
-					Content:     map[string]*spec3.MediaType{},
+					Content:     make(map[string]*spec3.MediaType, len(consumes)),
 					Description: param.Description(),
 					Required:    param.Required(),
 				},
@@ -187,18 +198,17 @@ func newOpenAPI(config *common.OpenAPIV3Config) openAPI {
 				Schemas: map[string]*spec.Schema{},
 			},
 		},
+		refCache: make(map[string]spec.Ref, 16),
 	}
 	if len(o.config.ResponseDefinitions) > 0 {
-		o.spec.Components.Responses = make(map[string]*spec3.Response)
-
+		o.spec.Components.Responses = make(map[string]*spec3.Response, len(o.config.ResponseDefinitions))
 	}
 	for k, response := range o.config.ResponseDefinitions {
 		o.spec.Components.Responses[k] = response
 	}
 
 	if len(o.config.SecuritySchemes) > 0 {
-		o.spec.Components.SecuritySchemes = make(spec3.SecuritySchemes)
-
+		o.spec.Components.SecuritySchemes = make(spec3.SecuritySchemes, len(o.config.SecuritySchemes))
 	}
 	for k, securityScheme := range o.config.SecuritySchemes {
 		o.spec.Components.SecuritySchemes[k] = securityScheme
@@ -240,8 +250,47 @@ func newOpenAPI(config *common.OpenAPIV3Config) openAPI {
 	return o
 }
 
+func setPathOperation(pathItem *spec3.Path, method string, op *spec3.Operation) {
+	switch method {
+	case "GET", "get":
+		pathItem.Get = op
+	case "POST", "post":
+		pathItem.Post = op
+	case "HEAD", "head":
+		pathItem.Head = op
+	case "PUT", "put":
+		pathItem.Put = op
+	case "DELETE", "delete":
+		pathItem.Delete = op
+	case "OPTIONS", "options":
+		pathItem.Options = op
+	case "PATCH", "patch":
+		pathItem.Patch = op
+	default:
+		switch strings.ToUpper(method) {
+		case "GET":
+			pathItem.Get = op
+		case "POST":
+			pathItem.Post = op
+		case "HEAD":
+			pathItem.Head = op
+		case "PUT":
+			pathItem.Put = op
+		case "DELETE":
+			pathItem.Delete = op
+		case "OPTIONS":
+			pathItem.Options = op
+		case "PATCH":
+			pathItem.Patch = op
+		}
+	}
+}
+
 func (o *openAPI) buildOpenAPISpec(webServices []common.RouteContainer) error {
 	pathsToIgnore := util.NewTrie(o.config.IgnorePrefixes)
+	var rwpBuf [8]routeWithParams
+	var commonParamsBuf [8]*spec3.Parameter
+	var commonKeysBuf [8]paramKey
 	for _, w := range webServices {
 		rootPath := w.RootPath()
 		if pathsToIgnore.HasPrefix(rootPath) {
@@ -263,8 +312,18 @@ func (o *openAPI) buildOpenAPISpec(webServices []common.RouteContainer) error {
 				continue
 			}
 
+			var rwps []routeWithParams
+			if len(routes) <= len(rwpBuf) {
+				rwps = rwpBuf[:len(routes)]
+			} else {
+				rwps = make([]routeWithParams, len(routes))
+			}
+			for i, r := range routes {
+				rwps[i] = routeWithParams{route: r, params: r.Parameters()}
+			}
+
 			// Aggregating common parameters make API spec (and generated clients) simpler
-			inPathCommonParamsMap, err := o.findCommonParameters(routes)
+			inPathCommonParams, inPathCommonKeys, err := o.findCommonParameters(rwps, commonParamsBuf[:0], commonKeysBuf[:0])
 			if err != nil {
 				return err
 			}
@@ -278,36 +337,21 @@ func (o *openAPI) buildOpenAPISpec(webServices []common.RouteContainer) error {
 			}
 
 			// add web services's parameters as well as any parameters appears in all ops, as common parameters
-			pathItem.Parameters = append(pathItem.Parameters, commonParams...)
-			for _, p := range inPathCommonParamsMap {
-				pathItem.Parameters = append(pathItem.Parameters, p)
+			if len(commonParams)+len(inPathCommonParams) > 0 {
+				pathItem.Parameters = make([]*spec3.Parameter, 0, len(commonParams)+len(inPathCommonParams))
+				pathItem.Parameters = append(pathItem.Parameters, commonParams...)
+				pathItem.Parameters = append(pathItem.Parameters, inPathCommonParams...)
+				sortParameters(pathItem.Parameters)
 			}
-			sortParameters(pathItem.Parameters)
 
-			for _, route := range routes {
-				op, err := o.buildOperations(route, inPathCommonParamsMap)
+			for i := range rwps {
+				route := rwps[i].route
+				op, err := o.buildOperations(route, rwps[i].params, inPathCommonKeys)
 				if err != nil {
 					return err
 				}
 				sortParameters(op.Parameters)
-
-				switch strings.ToUpper(route.Method()) {
-				case "GET":
-					pathItem.Get = op
-				case "POST":
-					pathItem.Post = op
-				case "HEAD":
-					pathItem.Head = op
-				case "PUT":
-					pathItem.Put = op
-				case "DELETE":
-					pathItem.Delete = op
-				case "OPTIONS":
-					pathItem.Options = op
-				case "PATCH":
-					pathItem.Patch = op
-				}
-
+				setPathOperation(pathItem, route.Method(), op)
 			}
 			o.spec.Paths.Paths[path] = pathItem
 		}
@@ -350,41 +394,68 @@ func BuildOpenAPIDefinitionsForResources(config *common.OpenAPIV3Config, names .
 	}
 	return o.spec.Components.Schemas, nil
 }
-func (o *openAPI) findCommonParameters(routes []common.Route) (map[interface{}]*spec3.Parameter, error) {
-	commonParamsMap := make(map[interface{}]*spec3.Parameter, 0)
-	paramOpsCountByName := make(map[interface{}]int, 0)
-	paramNameKindToDataMap := make(map[interface{}]common.Parameter, 0)
-	for _, route := range routes {
-		routeParamDuplicateMap := make(map[interface{}]bool)
-		s := ""
-		params := route.Parameters()
-		for _, param := range params {
-			m, _ := json.Marshal(param)
-			s += string(m) + "\n"
+
+type paramEntry struct {
+	key   paramKey
+	param common.Parameter
+	count int
+}
+
+func (o *openAPI) findCommonParameters(routes []routeWithParams, outParams []*spec3.Parameter, outKeys []paramKey) ([]*spec3.Parameter, []paramKey, error) {
+	var entriesBuf [16]paramEntry
+	entries := entriesBuf[:0]
+	var seenBuf [16]paramKey
+	for _, rwp := range routes {
+		params := rwp.params
+		if len(params) == 0 {
+			continue
+		}
+		seen := seenBuf[:0]
+		for i, param := range params {
 			key := mapKeyFromParam(param)
-			if routeParamDuplicateMap[key] {
+			if hasParamKey(seen, key) {
+				var s strings.Builder
+				for j := 0; j <= i; j++ {
+					m, _ := json.Marshal(params[j])
+					s.Write(m)
+					s.WriteByte('\n')
+				}
 				msg, _ := json.Marshal(params)
-				return commonParamsMap, fmt.Errorf("duplicate parameter %v for route %v, %v", param.Name(), string(msg), s)
+				return nil, nil, fmt.Errorf("duplicate parameter %v for route %v, %v", param.Name(), string(msg), s.String())
 			}
-			routeParamDuplicateMap[key] = true
-			paramOpsCountByName[key]++
-			paramNameKindToDataMap[key] = param
+			seen = append(seen, key)
+			found := false
+			for k := range entries {
+				if entries[k].key == key {
+					entries[k].count++
+					entries[k].param = param
+					found = true
+					break
+				}
+			}
+			if !found {
+				entries = append(entries, paramEntry{key: key, param: param, count: 1})
+			}
 		}
 	}
-	for key, count := range paramOpsCountByName {
-		paramData := paramNameKindToDataMap[key]
-		if count == len(routes) && paramData.Kind() != common.BodyParameterKind {
-			openAPIParam, err := o.buildParameter(paramData)
+	numRoutes := len(routes)
+	for i := range entries {
+		if entries[i].count == numRoutes && entries[i].param.Kind() != common.BodyParameterKind {
+			openAPIParam, err := o.buildParameter(entries[i].param)
 			if err != nil {
-				return commonParamsMap, err
+				return nil, nil, err
 			}
-			commonParamsMap[key] = openAPIParam
+			outParams = append(outParams, openAPIParam)
+			outKeys = append(outKeys, entries[i].key)
 		}
 	}
-	return commonParamsMap, nil
+	return outParams, outKeys, nil
 }
 
 func (o *openAPI) buildParameters(restParam []common.Parameter) (ret []*spec3.Parameter, err error) {
+	if len(restParam) == 0 {
+		return nil, nil
+	}
 	ret = make([]*spec3.Parameter, len(restParam))
 	for i, v := range restParam {
 		ret[i], err = o.buildParameter(v)
@@ -446,16 +517,21 @@ func (o *openAPI) buildDefinitionRecursively(name string) error {
 			SchemaProps:        item.Schema.SchemaProps,
 			SwaggerSchemaProps: item.Schema.SwaggerSchemaProps,
 		}
-		if extensions != nil {
-			if schema.Extensions == nil {
-				schema.Extensions = spec.Extensions{}
+		_, hasV2 := item.Schema.Extensions[common.ExtensionV2Schema]
+		if len(extensions) > 0 || hasV2 {
+			newExt := make(spec.Extensions, len(item.Schema.Extensions)+len(extensions))
+			for k, v := range item.Schema.Extensions {
+				if k != common.ExtensionV2Schema {
+					newExt[k] = v
+				}
 			}
 			for k, v := range extensions {
-				schema.Extensions[k] = v
+				if k != common.ExtensionV2Schema {
+					newExt[k] = v
+				}
 			}
+			schema.Extensions = newExt
 		}
-		// delete the embedded v2 schema if exists, otherwise no-op
-		delete(schema.VendorExtensible.Extensions, common.ExtensionV2Schema)
 		schema = builderutil.WrapRefs(schema)
 		o.spec.Components.Schemas[escapedName] = schema
 		for _, v := range item.Dependencies {
@@ -485,15 +561,23 @@ func (o *openAPI) toSchema(name string) (_ *spec.Schema, err error) {
 				Format: openAPIFormat,
 			},
 		}, nil
-	} else {
-		ref, err := o.buildDefinitionForType(name)
-		if err != nil {
-			return nil, err
-		}
+	}
+	if ref, ok := o.refCache[name]; ok {
 		return &spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Ref: spec.MustCreateRef(ref),
+				Ref: ref,
 			},
 		}, nil
 	}
+	refStr, err := o.buildDefinitionForType(name)
+	if err != nil {
+		return nil, err
+	}
+	ref := spec.MustCreateRef(refStr)
+	o.refCache[name] = ref
+	return &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Ref: ref,
+		},
+	}, nil
 }
