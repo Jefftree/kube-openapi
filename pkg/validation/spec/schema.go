@@ -516,26 +516,74 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 	return jsonv2.Unmarshal(data, s)
 }
 
+type stringOrAny struct {
+	str   string
+	isStr bool
+	other any
+	set   bool
+}
+
+func (v *stringOrAny) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	k := dec.PeekKind()
+	if k == '"' {
+		tok, err := dec.ReadToken()
+		if err != nil {
+			return err
+		}
+		v.str = tok.String()
+		v.isStr = true
+		v.set = true
+		return nil
+	}
+	if k == 'n' {
+		_, err := dec.ReadToken()
+		return err
+	}
+	v.set = true
+	return jsonv2.UnmarshalDecode(dec, &v.other)
+}
+
 func (s *Schema) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	var x struct {
 		Extensions Extensions `json:",embed"`
 		SchemaProps
 		SwaggerSchemaProps
+		Schema stringOrAny `json:"$schema,omitempty"`
+		Ref    stringOrAny `json:"$ref,omitempty"`
 	}
 	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 
-	if err := x.Ref.fromMap(x.Extensions); err != nil {
-		return err
+	if x.Ref.set {
+		if x.Ref.isStr {
+			ref, err := NewRef(x.Ref.str)
+			if err != nil {
+				return err
+			}
+			x.SchemaProps.Ref = ref
+		} else {
+			if x.Extensions == nil {
+				x.Extensions = make(Extensions, 1)
+			}
+			x.Extensions["$ref"] = x.Ref.other
+		}
 	}
 
-	if err := x.Schema.fromMap(x.Extensions); err != nil {
-		return err
+	if x.Schema.set {
+		if x.Schema.isStr {
+			u, err := url.Parse(x.Schema.str)
+			if err != nil {
+				return err
+			}
+			x.SchemaProps.Schema = SchemaURL(u.String())
+		} else {
+			if x.Extensions == nil {
+				x.Extensions = make(Extensions, 1)
+			}
+			x.Extensions["$schema"] = x.Schema.other
+		}
 	}
-
-	delete(x.Extensions, "$ref")
-	delete(x.Extensions, "$schema")
 
 	for _, pn := range swag.DefaultJSONNameProvider.GetJSONNames(s) {
 		delete(x.Extensions, pn)
