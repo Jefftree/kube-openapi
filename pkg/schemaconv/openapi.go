@@ -18,7 +18,6 @@ package schemaconv
 
 import (
 	"errors"
-	"path"
 	"strings"
 
 	"sigs.k8s.io/structured-merge-diff/v7/schema"
@@ -39,12 +38,14 @@ import (
 func ToSchemaFromOpenAPI(models map[string]*spec.Schema, preserveUnknownFields bool) (*schema.Schema, error) {
 	c := convert{
 		preserveUnknownFields: preserveUnknownFields,
-		output:                &schema.Schema{},
+		output: &schema.Schema{
+			Types: make([]schema.TypeDef, 0, len(models)+2),
+		},
 	}
 
 	for name, spec := range models {
 		// Skip/Ignore top-level references
-		if len(spec.Ref.String()) > 0 {
+		if spec.Ref.GetURL() != nil && len(spec.Ref.String()) > 0 {
 			continue
 		}
 
@@ -54,14 +55,14 @@ func ToSchemaFromOpenAPI(models map[string]*spec.Schema, preserveUnknownFields b
 		// https://github.com/kubernetes/kube-openapi/issues/364
 		if name == quantityResource {
 			a = schema.Atom{
-				Scalar: untypedDef.Atom.Scalar,
+				Scalar: ptr(schema.Scalar("untyped")),
 			}
 		} else if name == rawExtensionResource {
 			a = untypedDef.Atom
 		} else {
-			c2 := c.push(name, &a)
-			c2.visitSpec(spec)
-			c.pop(c2)
+			c.currentName = name
+			c.inlinedDepth = 0
+			a = c.parseSpecAtom(spec)
 		}
 
 		c.insertTypeDef(name, a)
@@ -75,13 +76,18 @@ func ToSchemaFromOpenAPI(models map[string]*spec.Schema, preserveUnknownFields b
 	return c.output, nil
 }
 
-func (c *convert) visitSpec(m *spec.Schema) {
-	// Check if this schema opts its descendants into preserve-unknown-fields
+func (c *convert) parseSpecAtom(m *spec.Schema) schema.Atom {
+	prevPreserve := c.preserveUnknownFields
 	if p, ok := m.Extensions["x-kubernetes-preserve-unknown-fields"]; ok && p == true {
 		c.preserveUnknownFields = true
 	}
-	a := c.top()
-	*a = c.parseSchema(m)
+	atom := c.parseSchema(m)
+	c.preserveUnknownFields = prevPreserve
+	return atom
+}
+
+func (c *convert) visitSpec(m *spec.Schema) {
+	*c.top() = c.parseSpecAtom(m)
 }
 
 func (c *convert) parseSchema(m *spec.Schema) schema.Atom {
@@ -126,45 +132,61 @@ func (c *convert) parseSchema(m *spec.Schema) schema.Atom {
 }
 
 func (c *convert) makeOpenAPIRef(specSchema *spec.Schema) schema.TypeRef {
+	return c.makeOpenAPIRefValue(*specSchema)
+}
+
+func (c *convert) makeOpenAPIRefValue(specSchema spec.Schema) schema.TypeRef {
 	refString := specSchema.Ref.String()
 
 	// Special-case handling for $ref stored inside a single-element allOf
-	if len(refString) == 0 && len(specSchema.AllOf) == 1 && len(specSchema.AllOf[0].Ref.String()) > 0 {
-		refString = specSchema.AllOf[0].Ref.String()
+	if len(refString) == 0 && len(specSchema.AllOf) == 1 {
+		if allOfRef := specSchema.AllOf[0].Ref.String(); len(allOfRef) > 0 {
+			refString = allOfRef
+		}
 	}
 
-	if _, n := path.Split(refString); len(n) > 0 {
-		//!TODO: Refactor the field ElementRelationship override
-		// we can generate the types with overrides ahead of time rather than
-		// requiring the hacky runtime support
-		// (could just create a normalized key struct containing all customizations
-		// 	to deduplicate)
-		mapRelationship, err := getMapElementRelationship(specSchema.Extensions)
-		if err != nil {
-			c.reportError("%v", err)
-		}
+	if len(refString) > 0 {
+		idx := strings.LastIndexByte(refString, '/')
+		n := refString[idx+1:]
+		if len(n) > 0 {
+			mapRelationship, err := getMapElementRelationship(specSchema.Extensions)
+			if err != nil {
+				c.reportError("%v", err)
+			}
 
-		if len(mapRelationship) > 0 {
+			if len(mapRelationship) > 0 {
+				return schema.TypeRef{
+					NamedType:           &n,
+					ElementRelationship: &mapRelationship,
+					Nullable:            specSchema.Nullable,
+				}
+			}
+
 			return schema.TypeRef{
-				NamedType:           &n,
-				ElementRelationship: &mapRelationship,
-				Nullable:            specSchema.Nullable,
+				NamedType: &n,
+				Nullable:  specSchema.Nullable,
 			}
 		}
-
-		return schema.TypeRef{
-			NamedType: &n,
-			Nullable:  specSchema.Nullable,
-		}
-
 	}
-	var inlined schema.Atom
 
-	// compute the type inline
-	c2 := c.push("inlined in "+c.currentName, &inlined)
-	c2.preserveUnknownFields = c.preserveUnknownFields
-	c2.visitSpec(specSchema)
-	c.pop(c2)
+	if len(specSchema.Type) > 0 {
+		switch typ := specSchema.Type[0]; typ {
+		case "integer", "boolean", "number", "string":
+			return schema.TypeRef{
+				Inlined:  convertPrimitive(typ, specSchema.Format),
+				Nullable: specSchema.Nullable,
+			}
+		}
+	}
+
+	return c.makeOpenAPIRefInlined(specSchema)
+}
+
+//go:noinline
+func (c *convert) makeOpenAPIRefInlined(specSchema spec.Schema) schema.TypeRef {
+	c.inlinedDepth++
+	inlined := c.parseSpecAtom(&specSchema)
+	c.inlinedDepth--
 
 	return schema.TypeRef{
 		Inlined:  inlined,
@@ -174,45 +196,38 @@ func (c *convert) makeOpenAPIRef(specSchema *spec.Schema) schema.TypeRef {
 
 func (c *convert) parseObject(s *spec.Schema) *schema.Map {
 	var fields []schema.StructField
-	for name, member := range s.Properties {
-		fields = append(fields, schema.StructField{
-			Name:    name,
-			Type:    c.makeOpenAPIRef(&member),
-			Default: member.Default,
-		})
+	if len(s.Properties) > 0 {
+		fields = make([]schema.StructField, 0, len(s.Properties))
+		for name, member := range s.Properties {
+			fields = append(fields, schema.StructField{
+				Name:    name,
+				Type:    c.makeOpenAPIRefValue(member),
+				Default: member.Default,
+			})
+		}
 	}
 
 	// AdditionalProperties informs the schema of any "unknown" keys
 	// Unknown keys are enforced by the ElementType field.
-	elementType := func() schema.TypeRef {
-		if s.AdditionalProperties == nil {
-			// According to openAPI spec, an object without properties and without
-			// additionalProperties is assumed to be a free-form object.
-			if c.preserveUnknownFields || len(s.Properties) == 0 {
-				return schema.TypeRef{
-					NamedType: &deducedName,
-				}
-			}
-
-			// If properties are specified, do not implicitly allow unknown
-			// fields
-			return schema.TypeRef{}
-		} else if s.AdditionalProperties.Schema != nil {
-			// Unknown fields use the referred schema
-			return c.makeOpenAPIRef(s.AdditionalProperties.Schema)
-
-		} else if s.AdditionalProperties.Allows {
-			// A boolean instead of a schema was provided. Deduce the
-			// type from the value provided at runtime.
-			return schema.TypeRef{
+	var elementType schema.TypeRef
+	if s.AdditionalProperties == nil {
+		// According to openAPI spec, an object without properties and without
+		// additionalProperties is assumed to be a free-form object.
+		if c.preserveUnknownFields || len(s.Properties) == 0 {
+			elementType = schema.TypeRef{
 				NamedType: &deducedName,
 			}
-		} else {
-			// Additional Properties are explicitly disallowed by the user.
-			// Ensure element type is empty.
-			return schema.TypeRef{}
 		}
-	}()
+	} else if s.AdditionalProperties.Schema != nil {
+		// Unknown fields use the referred schema
+		elementType = c.makeOpenAPIRefValue(*s.AdditionalProperties.Schema)
+	} else if s.AdditionalProperties.Allows {
+		// A boolean instead of a schema was provided. Deduce the
+		// type from the value provided at runtime.
+		elementType = schema.TypeRef{
+			NamedType: &deducedName,
+		}
+	}
 
 	relationship, err := getMapElementRelationship(s.Extensions)
 	if err != nil {
@@ -231,30 +246,29 @@ func (c *convert) parseList(s *spec.Schema) *schema.List {
 	if err != nil {
 		c.reportError("%v", err)
 	}
-	elementType := func() schema.TypeRef {
-		if s.Items != nil {
-			if s.Items.Schema == nil || s.Items.Len() != 1 {
-				c.reportError("structural schema arrays must have exactly one member subtype")
-				return schema.TypeRef{
-					NamedType: &deducedName,
-				}
+	var elementType schema.TypeRef
+	if s.Items != nil {
+		if s.Items.Schema == nil || s.Items.Len() != 1 {
+			c.reportError("structural schema arrays must have exactly one member subtype")
+			elementType = schema.TypeRef{
+				NamedType: &deducedName,
 			}
-
+		} else {
 			subSchema := s.Items.Schema
 			if subSchema == nil {
 				subSchema = &s.Items.Schemas[0]
 			}
-			return c.makeOpenAPIRef(subSchema)
-		} else if len(s.Type) > 0 && len(s.Type[0]) > 0 {
+			elementType = c.makeOpenAPIRefValue(*subSchema)
+		}
+	} else {
+		if len(s.Type) > 0 && len(s.Type[0]) > 0 {
 			c.reportError("`items` must be specified on arrays")
 		}
-
 		// A list with no items specified is treated as "untyped".
-		return schema.TypeRef{
+		elementType = schema.TypeRef{
 			NamedType: &untypedName,
 		}
-
-	}()
+	}
 
 	return &schema.List{
 		ElementRelationship: relationship,

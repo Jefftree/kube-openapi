@@ -35,17 +35,23 @@ func ToSchema(models proto.Models) (*schema.Schema, error) {
 // ToSchemaWithPreserveUnknownFields converts openapi definitions into a schema suitable for structured
 // merge (i.e. kubectl apply v2), it will preserve unknown fields if specified.
 func ToSchemaWithPreserveUnknownFields(models proto.Models, preserveUnknownFields bool) (*schema.Schema, error) {
+	modelList := models.ListModels()
 	c := convert{
 		preserveUnknownFields: preserveUnknownFields,
-		output:                &schema.Schema{},
+		output: &schema.Schema{
+			Types: make([]schema.TypeDef, 0, len(modelList)+2),
+		},
 	}
-	for _, name := range models.ListModels() {
+
+	for _, name := range modelList {
 		model := models.LookupModel(name)
 
 		var a schema.Atom
-		c2 := c.push(name, &a)
-		model.Accept(c2)
-		c.pop(c2)
+		c.currentName = name
+		c.inlinedDepth = 0
+		c.current = &a
+		c.preserveUnknownFields = preserveUnknownFields
+		model.Accept(&c)
 
 		c.insertTypeDef(name, a)
 	}
@@ -82,10 +88,15 @@ func (c *convert) makeRef(model proto.Schema, preserveUnknownFields bool) schema
 		}
 	} else {
 		// compute the type inline
-		c2 := c.push("inlined in "+c.currentName, &tr.Inlined)
-		c2.preserveUnknownFields = preserveUnknownFields
-		model.Accept(c2)
-		c.pop(c2)
+		prevCurrent := c.current
+		prevPreserve := c.preserveUnknownFields
+		c.current = &tr.Inlined
+		c.preserveUnknownFields = preserveUnknownFields
+		c.inlinedDepth++
+		model.Accept(c)
+		c.inlinedDepth--
+		c.current = prevCurrent
+		c.preserveUnknownFields = prevPreserve
 
 		if tr == (schema.TypeRef{}) {
 			// emit warning?
@@ -103,6 +114,9 @@ func (c *convert) VisitKind(k *proto.Kind) {
 
 	a := c.top()
 	a.Map = &schema.Map{}
+	if len(k.FieldOrder) > 0 {
+		a.Map.Fields = make([]schema.StructField, 0, len(k.FieldOrder))
+	}
 	for _, name := range k.FieldOrder {
 		member := k.Fields[name]
 		tr := c.makeRef(member, preserveUnknownFields)
@@ -163,7 +177,7 @@ func (c *convert) VisitMap(m *proto.Map) {
 
 func (c *convert) VisitPrimitive(p *proto.Primitive) {
 	a := c.top()
-	if c.currentName == quantityResource {
+	if c.inlinedDepth == 0 && c.currentName == quantityResource {
 		a.Scalar = ptr(schema.Scalar("untyped"))
 	} else {
 		*a = convertPrimitive(p.Type, p.Format)

@@ -19,6 +19,7 @@ package schemaconv
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"sigs.k8s.io/structured-merge-diff/v7/schema"
 )
@@ -33,6 +34,7 @@ type convert struct {
 	output                *schema.Schema
 
 	currentName   string
+	inlinedDepth  int
 	current       *schema.Atom
 	errorMessages []string
 }
@@ -53,8 +55,12 @@ func (c *convert) pop(c2 *convert) {
 }
 
 func (c *convert) reportError(format string, args ...interface{}) {
+	prefix := c.currentName
+	if c.inlinedDepth > 0 {
+		prefix = strings.Repeat("inlined in ", c.inlinedDepth) + c.currentName
+	}
 	c.errorMessages = append(c.errorMessages,
-		c.currentName+": "+fmt.Sprintf(format, args...),
+		prefix+": "+fmt.Sprintf(format, args...),
 	)
 }
 
@@ -220,6 +226,10 @@ func makeUnion(extensions map[string]interface{}) (schema.Union, error) {
 func toStringSlice(o interface{}) (out []string, ok bool) {
 	switch t := o.(type) {
 	case []interface{}:
+		if len(t) == 0 {
+			return nil, true
+		}
+		out = make([]string, 0, len(t))
 		for _, v := range t {
 			switch vt := v.(type) {
 			case string:
