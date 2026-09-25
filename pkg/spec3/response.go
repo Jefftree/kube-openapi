@@ -40,23 +40,97 @@ func (r *Responses) MarshalJSON() ([]byte, error) {
 	return internal.DeterministicMarshal(r)
 }
 
+func statusCodeString(code int) string {
+	switch code {
+	case 200:
+		return "200"
+	case 201:
+		return "201"
+	case 202:
+		return "202"
+	case 204:
+		return "204"
+	case 400:
+		return "400"
+	case 401:
+		return "401"
+	case 403:
+		return "403"
+	case 404:
+		return "404"
+	case 409:
+		return "409"
+	case 422:
+		return "422"
+	case 500:
+		return "500"
+	case 503:
+		return "503"
+	default:
+		return strconv.Itoa(code)
+	}
+}
+
 func (r Responses) MarshalJSONTo(enc *jsontext.Encoder) error {
+	if len(r.Extensions) == 0 && len(r.StatusCodeResponses) <= 16 {
+		var codes [16]int
+		n := 0
+		allThreeDigit := true
+		for k := range r.StatusCodeResponses {
+			if k < 100 || k > 999 {
+				allThreeDigit = false
+				break
+			}
+			codes[n] = k
+			n++
+		}
+		if allThreeDigit {
+			for i := 1; i < n; i++ {
+				for j := i; j > 0 && codes[j] < codes[j-1]; j-- {
+					codes[j], codes[j-1] = codes[j-1], codes[j]
+				}
+			}
+			if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+				return err
+			}
+			for i := 0; i < n; i++ {
+				code := codes[i]
+				if err := enc.WriteToken(jsontext.String(statusCodeString(code))); err != nil {
+					return err
+				}
+				if err := jsonv2.MarshalEncode(enc, r.StatusCodeResponses[code]); err != nil {
+					return err
+				}
+			}
+			if r.Default != nil {
+				if err := enc.WriteToken(jsontext.String("default")); err != nil {
+					return err
+				}
+				if err := jsonv2.MarshalEncode(enc, r.Default); err != nil {
+					return err
+				}
+			}
+			return enc.WriteToken(jsontext.EndObject)
+		}
+	}
 	type ArbitraryKeys map[string]interface{}
 	var x struct {
 		ArbitraryKeys ArbitraryKeys `json:",embed"`
 		Default       *Response     `json:"default,omitzero"`
 	}
-	x.ArbitraryKeys = make(map[string]any, len(r.Extensions)+len(r.StatusCodeResponses))
-	for k, v := range r.Extensions {
-		if internal.IsExtensionKey(k) {
-			x.ArbitraryKeys[k] = v
+	if len(r.Extensions)+len(r.StatusCodeResponses) > 0 {
+		x.ArbitraryKeys = make(map[string]any, len(r.Extensions)+len(r.StatusCodeResponses))
+		for k, v := range r.Extensions {
+			if internal.IsExtensionKey(k) {
+				x.ArbitraryKeys[k] = v
+			}
+		}
+		for k, v := range r.StatusCodeResponses {
+			x.ArbitraryKeys[statusCodeString(k)] = v
 		}
 	}
-	for k, v := range r.StatusCodeResponses {
-		x.ArbitraryKeys[strconv.Itoa(k)] = v
-	}
 	x.Default = r.Default
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 func (r *Responses) UnmarshalJSON(data []byte) error {
@@ -165,7 +239,7 @@ func (r Response) MarshalJSONTo(enc *jsontext.Encoder) error {
 	x.Ref = r.Refable.Ref.String()
 	x.Extensions = internal.SanitizeExtensions(r.Extensions)
 	x.ResponseProps = r.ResponseProps
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 func (r *Response) UnmarshalJSON(data []byte) error {
@@ -174,14 +248,26 @@ func (r *Response) UnmarshalJSON(data []byte) error {
 
 func (r *Response) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	var x struct {
-		Extensions spec.Extensions `json:",embed"`
+		Ref        internal.StringOrAny `json:"$ref,omitempty"`
+		Extensions spec.Extensions      `json:",embed"`
 		ResponseProps
 	}
 	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
-	if err := internal.JSONRefFromMap(&r.Ref.Ref, x.Extensions); err != nil {
-		return err
+	if x.Ref.Set {
+		if x.Ref.IsStr {
+			ref, err := spec.NewRef(x.Ref.Str)
+			if err != nil {
+				return err
+			}
+			r.Ref = ref
+		} else {
+			if x.Extensions == nil {
+				x.Extensions = make(spec.Extensions, 1)
+			}
+			x.Extensions["$ref"] = x.Ref.Other
+		}
 	}
 	r.Extensions = internal.SanitizeExtensions(x.Extensions)
 	r.ResponseProps = x.ResponseProps
@@ -221,7 +307,7 @@ func (r *Link) MarshalJSONTo(enc *jsontext.Encoder) error {
 	x.Ref = r.Refable.Ref.String()
 	x.Extensions = internal.SanitizeExtensions(r.Extensions)
 	x.LinkProps = r.LinkProps
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 func (r *Link) UnmarshalJSON(data []byte) error {
@@ -230,14 +316,26 @@ func (r *Link) UnmarshalJSON(data []byte) error {
 
 func (l *Link) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	var x struct {
-		Extensions spec.Extensions `json:",embed"`
+		Ref        internal.StringOrAny `json:"$ref,omitempty"`
+		Extensions spec.Extensions      `json:",embed"`
 		LinkProps
 	}
 	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
-	if err := internal.JSONRefFromMap(&l.Ref.Ref, x.Extensions); err != nil {
-		return err
+	if x.Ref.Set {
+		if x.Ref.IsStr {
+			ref, err := spec.NewRef(x.Ref.Str)
+			if err != nil {
+				return err
+			}
+			l.Ref = ref
+		} else {
+			if x.Extensions == nil {
+				x.Extensions = make(spec.Extensions, 1)
+			}
+			x.Extensions["$ref"] = x.Ref.Other
+		}
 	}
 	l.Extensions = internal.SanitizeExtensions(x.Extensions)
 	l.LinkProps = x.LinkProps

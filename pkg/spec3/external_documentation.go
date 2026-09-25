@@ -48,7 +48,7 @@ func (e *ExternalDocumentation) MarshalJSONTo(enc *jsontext.Encoder) error {
 	}
 	x.Extensions = internal.SanitizeExtensions(e.Extensions)
 	x.ExternalDocumentationProps = e.ExternalDocumentationProps
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 func (e *ExternalDocumentation) UnmarshalJSON(data []byte) error {

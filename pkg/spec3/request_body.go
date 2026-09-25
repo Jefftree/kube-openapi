@@ -47,7 +47,7 @@ func (r *RequestBody) MarshalJSONTo(enc *jsontext.Encoder) error {
 	x.Ref = r.Refable.Ref.String()
 	x.Extensions = internal.SanitizeExtensions(r.Extensions)
 	x.RequestBodyProps = requestBodyPropsOmitZero(r.RequestBodyProps)
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 func (r *RequestBody) UnmarshalJSON(data []byte) error {
@@ -72,14 +72,26 @@ type requestBodyPropsOmitZero struct {
 
 func (r *RequestBody) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	var x struct {
-		Extensions spec.Extensions `json:",embed"`
+		Ref        internal.StringOrAny `json:"$ref,omitempty"`
+		Extensions spec.Extensions      `json:",embed"`
 		RequestBodyProps
 	}
 	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
-	if err := internal.JSONRefFromMap(&r.Ref.Ref, x.Extensions); err != nil {
-		return err
+	if x.Ref.Set {
+		if x.Ref.IsStr {
+			ref, err := spec.NewRef(x.Ref.Str)
+			if err != nil {
+				return err
+			}
+			r.Ref = ref
+		} else {
+			if x.Extensions == nil {
+				x.Extensions = make(spec.Extensions, 1)
+			}
+			x.Extensions["$ref"] = x.Ref.Other
+		}
 	}
 	r.Extensions = internal.SanitizeExtensions(x.Extensions)
 	r.RequestBodyProps = x.RequestBodyProps

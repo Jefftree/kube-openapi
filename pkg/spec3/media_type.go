@@ -44,7 +44,7 @@ func (e *MediaType) MarshalJSONTo(enc *jsontext.Encoder) error {
 	}
 	x.Extensions = internal.SanitizeExtensions(e.Extensions)
 	x.MediaTypeProps = mediaTypePropsOmitZero(e.MediaTypeProps)
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 func (m *MediaType) UnmarshalJSON(data []byte) error {

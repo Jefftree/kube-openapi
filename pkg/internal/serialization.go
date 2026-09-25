@@ -17,10 +17,40 @@ limitations under the License.
 package internal
 
 import (
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 
 	"github.com/go-openapi/jsonreference"
 )
+
+// StringOrAny decodes a JSON string directly without interface{} boxing,
+// or falls back to decoding any non-string JSON value into Other.
+type StringOrAny struct {
+	Str   string
+	IsStr bool
+	Other any
+	Set   bool
+}
+
+func (v *StringOrAny) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	k := dec.PeekKind()
+	if k == '"' {
+		tok, err := dec.ReadToken()
+		if err != nil {
+			return err
+		}
+		v.Str = tok.String()
+		v.IsStr = true
+		v.Set = true
+		return nil
+	}
+	if k == 'n' {
+		_, err := dec.ReadToken()
+		return err
+	}
+	v.Set = true
+	return jsonv2.UnmarshalDecode(dec, &v.Other)
+}
 
 // DeterministicMarshal calls the jsonv2 library with the deterministic
 // flag in order to have stable marshaling.
@@ -49,13 +79,22 @@ func JSONRefFromMap(jsonRef *jsonreference.Ref, v map[string]interface{}) error 
 // keys (non x-*, X-*) keys are dropped from the map. Returns the new
 // modified map, or nil if the map is now empty.
 func SanitizeExtensions(e map[string]interface{}) map[string]interface{} {
+	if len(e) == 0 {
+		return nil
+	}
 	for k := range e {
 		if !IsExtensionKey(k) {
-			delete(e, k)
+			cleaned := make(map[string]interface{}, len(e))
+			for k2, v2 := range e {
+				if IsExtensionKey(k2) {
+					cleaned[k2] = v2
+				}
+			}
+			if len(cleaned) == 0 {
+				return nil
+			}
+			return cleaned
 		}
-	}
-	if len(e) == 0 {
-		e = nil
 	}
 	return e
 }

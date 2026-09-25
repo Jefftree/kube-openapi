@@ -48,7 +48,7 @@ func (s *SecurityScheme) MarshalJSONTo(enc *jsontext.Encoder) error {
 	x.Ref = s.Refable.Ref.String()
 	x.Extensions = internal.SanitizeExtensions(s.Extensions)
 	x.SecuritySchemeProps = s.SecuritySchemeProps
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 // UnmarshalJSON hydrates this items instance with the data from JSON

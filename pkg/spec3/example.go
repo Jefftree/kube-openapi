@@ -45,7 +45,7 @@ func (e *Example) MarshalJSONTo(enc *jsontext.Encoder) error {
 	x.Ref = e.Refable.Ref.String()
 	x.Extensions = internal.SanitizeExtensions(e.Extensions)
 	x.ExampleProps = e.ExampleProps
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 func (e *Example) UnmarshalJSON(data []byte) error {
@@ -54,14 +54,26 @@ func (e *Example) UnmarshalJSON(data []byte) error {
 
 func (e *Example) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	var x struct {
-		Extensions spec.Extensions `json:",embed"`
+		Ref        internal.StringOrAny `json:"$ref,omitempty"`
+		Extensions spec.Extensions      `json:",embed"`
 		ExampleProps
 	}
 	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
-	if err := internal.JSONRefFromMap(&e.Ref.Ref, x.Extensions); err != nil {
-		return err
+	if x.Ref.Set {
+		if x.Ref.IsStr {
+			ref, err := spec.NewRef(x.Ref.Str)
+			if err != nil {
+				return err
+			}
+			e.Ref = ref
+		} else {
+			if x.Extensions == nil {
+				x.Extensions = make(spec.Extensions, 1)
+			}
+			x.Extensions["$ref"] = x.Ref.Other
+		}
 	}
 	e.Extensions = internal.SanitizeExtensions(x.Extensions)
 	e.ExampleProps = x.ExampleProps

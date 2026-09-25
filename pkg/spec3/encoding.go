@@ -41,7 +41,7 @@ func (e *Encoding) MarshalJSONTo(enc *jsontext.Encoder) error {
 	}
 	x.Extensions = internal.SanitizeExtensions(e.Extensions)
 	x.EncodingProps = encodingPropsOmitZero(e.EncodingProps)
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 func (e *Encoding) UnmarshalJSON(data []byte) error {

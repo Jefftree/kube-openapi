@@ -50,7 +50,7 @@ func (s *Server) MarshalJSONTo(enc *jsontext.Encoder) error {
 	}
 	x.Extensions = internal.SanitizeExtensions(s.Extensions)
 	x.ServerProps = s.ServerProps
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 func (s *Server) UnmarshalJSON(data []byte) error {
@@ -97,7 +97,7 @@ func (s *ServerVariable) MarshalJSONTo(enc *jsontext.Encoder) error {
 	}
 	x.Extensions = internal.SanitizeExtensions(s.Extensions)
 	x.ServerVariableProps = s.ServerVariableProps
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 func (s *ServerVariable) UnmarshalJSON(data []byte) error {

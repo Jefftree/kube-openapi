@@ -44,7 +44,7 @@ func (o *Operation) MarshalJSONTo(enc *jsontext.Encoder) error {
 	}
 	x.Extensions = internal.SanitizeExtensions(o.Extensions)
 	x.OperationProps = operationPropsOmitZero(o.OperationProps)
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 // UnmarshalJSON hydrates this items instance with the data from JSON
