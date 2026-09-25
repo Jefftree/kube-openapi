@@ -106,23 +106,19 @@ func Static[T any](value T, etag string) Value[T] {
 // implement its own sorting or iteration order.
 func Merge[K comparable, T, V any](mergeFn func(results map[K]Result[T]) (V, string, error), caches map[K]Value[T]) Value[V] {
 	list := make([]Value[T], 0, len(caches))
-
-	// map from index to key
-	indexes := make(map[int]K, len(caches))
-	i := 0
-	for k := range caches {
-		list = append(list, caches[k])
-		indexes[i] = k
-		i++
+	keys := make([]K, 0, len(caches))
+	for k, v := range caches {
+		list = append(list, v)
+		keys = append(keys, k)
 	}
 
 	return MergeList(func(results []Result[T]) (V, string, error) {
-		if len(results) != len(indexes) {
-			panic(fmt.Errorf("invalid result length %d, expected %d", len(results), len(indexes)))
+		if len(results) != len(keys) {
+			panic(fmt.Errorf("invalid result length %d, expected %d", len(results), len(keys)))
 		}
 		m := make(map[K]Result[T], len(results))
 		for i := range results {
-			m[indexes[i]] = results[i]
+			m[keys[i]] = results[i]
 		}
 		return mergeFn(m)
 	}, list)
@@ -147,6 +143,8 @@ func MergeList[T, V any](mergeFn func(results []Result[T]) (V, string, error), d
 	return &listMerger[T, V]{
 		mergeFn:   mergeFn,
 		delegates: delegates,
+		cache:     make([]Result[T], len(delegates)),
+		scratch:   make([]Result[T], len(delegates)),
 	}
 }
 
@@ -154,34 +152,22 @@ type listMerger[T, V any] struct {
 	lock      sync.Mutex
 	mergeFn   func([]Result[T]) (V, string, error)
 	delegates []Value[T]
+	hasCache  bool
 	cache     []Result[T]
+	scratch   []Result[T]
 	result    Result[V]
 }
 
 func (c *listMerger[T, V]) prepareResultsLocked() []Result[T] {
-	cacheResults := make([]Result[T], len(c.delegates))
-	ch := make(chan struct {
-		int
-		Result[T]
-	}, len(c.delegates))
 	for i := range c.delegates {
-		go func(index int) {
-			value, etag, err := c.delegates[index].Get()
-			ch <- struct {
-				int
-				Result[T]
-			}{index, Result[T]{Value: value, Etag: etag, Err: err}}
-		}(i)
+		value, etag, err := c.delegates[i].Get()
+		c.scratch[i] = Result[T]{Value: value, Etag: etag, Err: err}
 	}
-	for i := 0; i < len(c.delegates); i++ {
-		res := <-ch
-		cacheResults[res.int] = res.Result
-	}
-	return cacheResults
+	return c.scratch
 }
 
 func (c *listMerger[T, V]) needsRunningLocked(results []Result[T]) bool {
-	if c.cache == nil {
+	if !c.hasCache {
 		return true
 	}
 	if c.result.Err != nil {
@@ -204,7 +190,8 @@ func (c *listMerger[T, V]) Get() (V, string, error) {
 	defer c.lock.Unlock()
 	cacheResults := c.prepareResultsLocked()
 	if c.needsRunningLocked(cacheResults) {
-		c.cache = cacheResults
+		c.hasCache = true
+		c.cache, c.scratch = c.scratch, c.cache
 		c.result.Value, c.result.Etag, c.result.Err = c.mergeFn(c.cache)
 	}
 	return c.result.Value, c.result.Etag, c.result.Err
@@ -217,12 +204,33 @@ func (c *listMerger[T, V]) Get() (V, string, error) {
 // this time, or if the transformerFn failed before, the function is
 // reran.
 func Transform[T, V any](transformerFn func(T, string, error) (V, string, error), source Value[T]) Value[V] {
-	return MergeList(func(delegates []Result[T]) (V, string, error) {
-		if len(delegates) != 1 {
-			panic(fmt.Errorf("invalid cache for transformer cache: %v", delegates))
-		}
-		return transformerFn(delegates[0].Value, delegates[0].Etag, delegates[0].Err)
-	}, []Value[T]{source})
+	return &transformer[T, V]{
+		transformerFn: transformerFn,
+		source:        source,
+	}
+}
+
+type transformer[T, V any] struct {
+	lock          sync.Mutex
+	transformerFn func(T, string, error) (V, string, error)
+	source        Value[T]
+	hasCache      bool
+	sourceEtag    string
+	sourceErr     error
+	result        Result[V]
+}
+
+func (c *transformer[T, V]) Get() (V, string, error) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	val, etag, err := c.source.Get()
+	if !c.hasCache || c.result.Err != nil || etag != c.sourceEtag || err != nil || c.sourceErr != nil {
+		c.hasCache = true
+		c.sourceEtag = etag
+		c.sourceErr = err
+		c.result.Value, c.result.Etag, c.result.Err = c.transformerFn(val, etag, err)
+	}
+	return c.result.Value, c.result.Etag, c.result.Err
 }
 
 // Once calls Value[T].Get() lazily and only once, even in case of an error result.

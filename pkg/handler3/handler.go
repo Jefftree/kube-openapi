@@ -25,7 +25,6 @@ import (
 	"net/url"
 	"path"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -85,11 +84,11 @@ func newOpenAPIV3Group() *openAPIV3Group {
 		if err != nil {
 			return timedSpec{}, "", err
 		}
-		json, err := json.Marshal(spec)
+		jsonBytes, err := spec.MarshalJSON()
 		if err != nil {
 			return timedSpec{}, "", err
 		}
-		return timedSpec{spec: json, lastModified: time.Now()}, computeETag(json), nil
+		return timedSpec{spec: jsonBytes, lastModified: time.Now()}, computeETag(jsonBytes), nil
 	}, &o.specCache)
 	o.pbCache = cached.Transform(func(ts timedSpec, etag string, err error) (timedSpec, string, error) {
 		if err != nil {
@@ -118,19 +117,23 @@ type OpenAPIService struct {
 	discoveryCache cached.LastSuccess[timedSpec]
 }
 
+const hexUpper = "0123456789ABCDEF"
+
 func computeETag(data []byte) string {
 	if data == nil {
 		return ""
 	}
-	return fmt.Sprintf("%X", sha512.Sum512(data))
+	sum := sha512.Sum512(data)
+	var buf [128]byte
+	for i, b := range sum {
+		buf[i*2] = hexUpper[b>>4]
+		buf[i*2+1] = hexUpper[b&0x0f]
+	}
+	return string(buf[:])
 }
 
 func constructServerRelativeURL(gvString, etag string) string {
-	u := url.URL{Path: path.Join("/openapi/v3", gvString)}
-	query := url.Values{}
-	query.Set("hash", etag)
-	u.RawQuery = query.Encode()
-	return u.String()
+	return path.Join("/openapi/v3", gvString) + "?hash=" + url.QueryEscape(etag)
 }
 
 // NewOpenAPIService builds an OpenAPIService starting with the given spec.
@@ -148,7 +151,7 @@ func (o *OpenAPIService) buildDiscoveryCacheLocked() cached.Value[timedSpec] {
 		caches[gvName] = group.jsonCache
 	}
 	return cached.Merge(func(results map[string]cached.Result[timedSpec]) (timedSpec, string, error) {
-		discovery := &OpenAPIV3Discovery{Paths: make(map[string]OpenAPIV3DiscoveryGroupVersion)}
+		discovery := &OpenAPIV3Discovery{Paths: make(map[string]OpenAPIV3DiscoveryGroupVersion, len(results))}
 		for gvName, result := range results {
 			if result.Err != nil {
 				return timedSpec{}, "", result.Err
@@ -208,6 +211,19 @@ func (o *OpenAPIService) DeleteGroupVersion(group string) {
 	o.discoveryCache.Store(o.buildDiscoveryCacheLocked())
 }
 
+func extractGroupVersion(p string) string {
+	slashes := 0
+	for i := 0; i < len(p); i++ {
+		if p[i] == '/' {
+			slashes++
+			if slashes == 3 {
+				return p[i+1:]
+			}
+		}
+	}
+	return ""
+}
+
 func (o *OpenAPIService) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 	ts, etag, err := o.discoveryCache.Get()
 	if err != nil {
@@ -221,21 +237,31 @@ func (o *OpenAPIService) HandleDiscovery(w http.ResponseWriter, r *http.Request)
 }
 
 func (o *OpenAPIService) HandleGroupVersion(w http.ResponseWriter, r *http.Request) {
-	url := strings.SplitAfterN(r.URL.Path, "/", 4)
-	group := url[3]
+	group := extractGroupVersion(r.URL.Path)
 
 	decipherableFormats := r.Header.Get("Accept")
-	if decipherableFormats == "" {
-		decipherableFormats = "*/*"
+	var singleClause [1]goautoneg.Accept
+	var clauses []goautoneg.Accept
+	switch decipherableFormats {
+	case "", "*/*", "application/json", "application/*":
+		singleClause[0] = goautoneg.Accept{Type: "application", SubType: subTypeJSON}
+		clauses = singleClause[:]
+	case "application/" + subTypeProtobuf:
+		singleClause[0] = goautoneg.Accept{Type: "application", SubType: subTypeProtobuf}
+		clauses = singleClause[:]
+	case "application/" + subTypeProtobufDeprecated:
+		singleClause[0] = goautoneg.Accept{Type: "application", SubType: subTypeProtobufDeprecated}
+		clauses = singleClause[:]
+	default:
+		clauses = goautoneg.ParseAccept(decipherableFormats)
 	}
-	clauses := goautoneg.ParseAccept(decipherableFormats)
 	w.Header().Add("Vary", "Accept")
 
 	if len(clauses) == 0 {
 		return
 	}
 
-	accepted := []struct {
+	accepted := [3]struct {
 		Type                string
 		SubType             string
 		ReturnedContentType string
