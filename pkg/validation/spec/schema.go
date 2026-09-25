@@ -20,8 +20,6 @@ import (
 	jsonv2 "encoding/json/v2"
 	"net/url"
 
-	"github.com/go-openapi/swag"
-
 	"k8s.io/kube-openapi/pkg/internal"
 )
 
@@ -495,20 +493,42 @@ func (s Schema) MarshalJSONTo(enc *jsontext.Encoder) error {
 		Schema             string                     `json:"$schema,omitempty"`
 		Ref                string                     `json:"$ref,omitempty"`
 	}
-	x.ArbitraryKeys = make(map[string]any, len(s.Extensions)+len(s.ExtraProps))
-	for k, v := range s.Extensions {
-		if internal.IsExtensionKey(k) {
+	if len(s.ExtraProps) == 0 {
+		if len(s.Extensions) > 0 {
+			allValid := true
+			for k := range s.Extensions {
+				if !internal.IsExtensionKey(k) {
+					allValid = false
+					break
+				}
+			}
+			if allValid {
+				x.ArbitraryKeys = ArbitraryKeys(s.Extensions)
+			} else {
+				x.ArbitraryKeys = make(map[string]any, len(s.Extensions))
+				for k, v := range s.Extensions {
+					if internal.IsExtensionKey(k) {
+						x.ArbitraryKeys[k] = v
+					}
+				}
+			}
+		}
+	} else {
+		x.ArbitraryKeys = make(map[string]any, len(s.Extensions)+len(s.ExtraProps))
+		for k, v := range s.Extensions {
+			if internal.IsExtensionKey(k) {
+				x.ArbitraryKeys[k] = v
+			}
+		}
+		for k, v := range s.ExtraProps {
 			x.ArbitraryKeys[k] = v
 		}
-	}
-	for k, v := range s.ExtraProps {
-		x.ArbitraryKeys[k] = v
 	}
 	x.SchemaProps = schemaPropsOmitZero(s.SchemaProps)
 	x.SwaggerSchemaProps = swaggerSchemaPropsOmitZero(s.SwaggerSchemaProps)
 	x.Ref = s.Ref.String()
 	x.Schema = string(s.Schema)
-	return jsonv2.MarshalEncode(enc, x)
+	return jsonv2.MarshalEncode(enc, &x)
 }
 
 // UnmarshalJSON marshal this from JSON
@@ -521,31 +541,66 @@ func (s *Schema) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 		Extensions Extensions `json:",embed"`
 		SchemaProps
 		SwaggerSchemaProps
+		Schema jsontext.Value `json:"$schema,omitempty"`
+		Ref    jsontext.Value `json:"$ref,omitempty"`
 	}
 	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 
-	if err := x.Ref.fromMap(x.Extensions); err != nil {
-		return err
+	if len(x.Ref) > 0 {
+		if x.Ref[0] == '"' {
+			var str string
+			if err := jsonv2.Unmarshal(x.Ref, &str); err != nil {
+				return err
+			}
+			ref, err := NewRef(str)
+			if err != nil {
+				return err
+			}
+			x.SchemaProps.Ref = ref
+		} else if x.Ref.Kind() != 'n' {
+			var raw any
+			if err := jsonv2.Unmarshal(x.Ref, &raw); err != nil {
+				return err
+			}
+			if x.Extensions == nil {
+				x.Extensions = make(Extensions, 1)
+			}
+			x.Extensions["$ref"] = raw
+		}
 	}
 
-	if err := x.Schema.fromMap(x.Extensions); err != nil {
-		return err
+	if len(x.Schema) > 0 {
+		if x.Schema[0] == '"' {
+			var str string
+			if err := jsonv2.Unmarshal(x.Schema, &str); err != nil {
+				return err
+			}
+			u, err := url.Parse(str)
+			if err != nil {
+				return err
+			}
+			x.SchemaProps.Schema = SchemaURL(u.String())
+		} else if x.Schema.Kind() != 'n' {
+			var raw any
+			if err := jsonv2.Unmarshal(x.Schema, &raw); err != nil {
+				return err
+			}
+			if x.Extensions == nil {
+				x.Extensions = make(Extensions, 1)
+			}
+			x.Extensions["$schema"] = raw
+		}
 	}
 
-	delete(x.Extensions, "$ref")
-	delete(x.Extensions, "$schema")
-
-	for _, pn := range swag.DefaultJSONNameProvider.GetJSONNames(s) {
-		delete(x.Extensions, pn)
+	if len(x.Extensions) > 0 {
+		s.ExtraProps = x.Extensions.sanitizeWithExtra()
+		s.Extensions = internal.SanitizeExtensions(x.Extensions)
+	} else {
+		s.ExtraProps = nil
+		s.Extensions = nil
 	}
-	if len(x.Extensions) == 0 {
-		x.Extensions = nil
-	}
-
-	s.ExtraProps = x.Extensions.sanitizeWithExtra()
-	s.Extensions = internal.SanitizeExtensions(x.Extensions)
 	s.SchemaProps = x.SchemaProps
 	s.SwaggerSchemaProps = x.SwaggerSchemaProps
 	return nil
