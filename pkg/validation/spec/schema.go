@@ -19,6 +19,7 @@ import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"net/url"
+	"sync"
 
 	"k8s.io/kube-openapi/pkg/internal"
 )
@@ -479,20 +480,68 @@ func (s *Schema) WithExternalDocs(description, url string) *Schema {
 	return s
 }
 
+type schemaMarshal struct {
+	ArbitraryKeys      map[string]any             `json:",embed"`
+	SchemaProps        schemaPropsOmitZero        `json:",embed"`
+	SwaggerSchemaProps swaggerSchemaPropsOmitZero `json:",embed"`
+	Schema             string                     `json:"$schema,omitempty"`
+	Ref                string                     `json:"$ref,omitempty"`
+}
+
+var schemaMarshalPool = sync.Pool{
+	New: func() any {
+		return new(schemaMarshal)
+	},
+}
+
+type stringOrAny struct {
+	str   string
+	isStr bool
+	other any
+	set   bool
+}
+
+func (v *stringOrAny) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	k := dec.PeekKind()
+	if k == '"' {
+		tok, err := dec.ReadToken()
+		if err != nil {
+			return err
+		}
+		v.str = tok.String()
+		v.isStr = true
+		v.set = true
+		return nil
+	}
+	if k == 'n' {
+		_, err := dec.ReadToken()
+		return err
+	}
+	v.set = true
+	return jsonv2.UnmarshalDecode(dec, &v.other)
+}
+
+type schemaUnmarshal struct {
+	Extensions Extensions `json:",embed"`
+	SchemaProps
+	SwaggerSchemaProps
+	Schema stringOrAny `json:"$schema,omitempty"`
+	Ref    stringOrAny `json:"$ref,omitempty"`
+}
+
+var schemaUnmarshalPool = sync.Pool{
+	New: func() any {
+		return new(schemaUnmarshal)
+	},
+}
+
 // MarshalJSON marshal this to JSON
 func (s Schema) MarshalJSON() ([]byte, error) {
 	return internal.DeterministicMarshal(s)
 }
 
 func (s Schema) MarshalJSONTo(enc *jsontext.Encoder) error {
-	type ArbitraryKeys map[string]interface{}
-	var x struct {
-		ArbitraryKeys      ArbitraryKeys              `json:",embed"`
-		SchemaProps        schemaPropsOmitZero        `json:",embed"`
-		SwaggerSchemaProps swaggerSchemaPropsOmitZero `json:",embed"`
-		Schema             string                     `json:"$schema,omitempty"`
-		Ref                string                     `json:"$ref,omitempty"`
-	}
+	x := schemaMarshalPool.Get().(*schemaMarshal)
 	if len(s.ExtraProps) == 0 {
 		if len(s.Extensions) > 0 {
 			allValid := true
@@ -503,7 +552,7 @@ func (s Schema) MarshalJSONTo(enc *jsontext.Encoder) error {
 				}
 			}
 			if allValid {
-				x.ArbitraryKeys = ArbitraryKeys(s.Extensions)
+				x.ArbitraryKeys = s.Extensions
 			} else {
 				x.ArbitraryKeys = make(map[string]any, len(s.Extensions))
 				for k, v := range s.Extensions {
@@ -528,7 +577,10 @@ func (s Schema) MarshalJSONTo(enc *jsontext.Encoder) error {
 	x.SwaggerSchemaProps = swaggerSchemaPropsOmitZero(s.SwaggerSchemaProps)
 	x.Ref = s.Ref.String()
 	x.Schema = string(s.Schema)
-	return jsonv2.MarshalEncode(enc, &x)
+	err := jsonv2.MarshalEncode(enc, x)
+	*x = schemaMarshal{}
+	schemaMarshalPool.Put(x)
+	return err
 }
 
 // UnmarshalJSON marshal this from JSON
@@ -537,60 +589,44 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 }
 
 func (s *Schema) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
-	var x struct {
-		Extensions Extensions `json:",embed"`
-		SchemaProps
-		SwaggerSchemaProps
-		Schema jsontext.Value `json:"$schema,omitempty"`
-		Ref    jsontext.Value `json:"$ref,omitempty"`
-	}
-	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+	x := schemaUnmarshalPool.Get().(*schemaUnmarshal)
+	if err := jsonv2.UnmarshalDecode(dec, x); err != nil {
+		*x = schemaUnmarshal{}
+		schemaUnmarshalPool.Put(x)
 		return err
 	}
 
-	if len(x.Ref) > 0 {
-		if x.Ref[0] == '"' {
-			var str string
-			if err := jsonv2.Unmarshal(x.Ref, &str); err != nil {
-				return err
-			}
-			ref, err := NewRef(str)
+	if x.Ref.set {
+		if x.Ref.isStr {
+			ref, err := NewRef(x.Ref.str)
 			if err != nil {
+				*x = schemaUnmarshal{}
+				schemaUnmarshalPool.Put(x)
 				return err
 			}
 			x.SchemaProps.Ref = ref
-		} else if x.Ref.Kind() != 'n' {
-			var raw any
-			if err := jsonv2.Unmarshal(x.Ref, &raw); err != nil {
-				return err
-			}
+		} else {
 			if x.Extensions == nil {
 				x.Extensions = make(Extensions, 1)
 			}
-			x.Extensions["$ref"] = raw
+			x.Extensions["$ref"] = x.Ref.other
 		}
 	}
 
-	if len(x.Schema) > 0 {
-		if x.Schema[0] == '"' {
-			var str string
-			if err := jsonv2.Unmarshal(x.Schema, &str); err != nil {
-				return err
-			}
-			u, err := url.Parse(str)
+	if x.Schema.set {
+		if x.Schema.isStr {
+			u, err := url.Parse(x.Schema.str)
 			if err != nil {
+				*x = schemaUnmarshal{}
+				schemaUnmarshalPool.Put(x)
 				return err
 			}
 			x.SchemaProps.Schema = SchemaURL(u.String())
-		} else if x.Schema.Kind() != 'n' {
-			var raw any
-			if err := jsonv2.Unmarshal(x.Schema, &raw); err != nil {
-				return err
-			}
+		} else {
 			if x.Extensions == nil {
 				x.Extensions = make(Extensions, 1)
 			}
-			x.Extensions["$schema"] = raw
+			x.Extensions["$schema"] = x.Schema.other
 		}
 	}
 
@@ -603,5 +639,7 @@ func (s *Schema) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	}
 	s.SchemaProps = x.SchemaProps
 	s.SwaggerSchemaProps = x.SwaggerSchemaProps
+	*x = schemaUnmarshal{}
+	schemaUnmarshalPool.Put(x)
 	return nil
 }
